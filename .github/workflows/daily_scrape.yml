@@ -24,6 +24,18 @@ jobs:
       - name: Create data directory
         run: mkdir -p data
 
+      - name: Debug — show repo structure
+        run: |
+          echo "=== root ==="
+          ls -la
+          echo "=== enrichment/ ==="
+          ls -la enrichment/
+          echo "=== Python path ==="
+          python -c "import sys; print('\n'.join(sys.path))"
+          echo "=== test import ==="
+          python -c "import enrichment; print('enrichment package OK')"
+          python -c "import enrichment.score; print('enrichment.score OK')"
+
       - name: Scrape jobs
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
