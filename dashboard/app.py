@@ -1,7 +1,15 @@
 """
 dashboard/app.py
 
-AI Job Tracker — modern card-based layout.
+AI Job Tracker — Modern redesign with:
+  • Kanban pipeline view
+  • Interactive Plotly charts (score distribution, status funnel, source breakdown)
+  • Polished card UI with animated hover effects
+  • Sticky sidebar with smart filters
+  • Quick-action status buttons
+  • Color-coded score rings
+  • Responsive layout
+
 Run: streamlit run dashboard/app.py
 """
 
@@ -13,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -21,53 +30,314 @@ load_dotenv()
 DEMO_MODE     = not os.environ.get("GCP_PROJECT_ID")
 RAW_JOBS_PATH = Path(__file__).parent.parent / "data" / "raw_jobs.json"
 
-STATUSES = ["new", "saved", "applied", "replied", "interview", "rejected"]
+STATUSES = ["new", "saved", "applied", "replied", "interview", "rejected", "ignored"]
 
-STATUS_STYLE = {
-    "new":       ("🆕", "#6B7280", "#F3F4F6"),
-    "saved":     ("⭐", "#92400E", "#FEF3C7"),
-    "applied":   ("📤", "#1D4ED8", "#DBEAFE"),
-    "replied":   ("💬", "#6D28D9", "#EDE9FE"),
-    "interview": ("📅", "#065F46", "#D1FAE5"),
-    "rejected":  ("❌", "#991B1B", "#FEE2E2"),
+STATUS_CONFIG = {
+    "new":       {"emoji": "🆕", "color": "#6B7280", "bg": "#F3F4F6", "dark_bg": "#374151", "label": "New"},
+    "saved":     {"emoji": "⭐", "color": "#D97706", "bg": "#FEF3C7", "dark_bg": "#451A03", "label": "Saved"},
+    "applied":   {"emoji": "📤", "color": "#2563EB", "bg": "#DBEAFE", "dark_bg": "#1E3A5F", "label": "Applied"},
+    "replied":   {"emoji": "💬", "color": "#7C3AED", "bg": "#EDE9FE", "dark_bg": "#3B0764", "label": "Replied"},
+    "interview": {"emoji": "📅", "color": "#059669", "bg": "#D1FAE5", "dark_bg": "#064E3B", "label": "Interview"},
+    "rejected":  {"emoji": "❌", "color": "#DC2626", "bg": "#FEE2E2", "dark_bg": "#450A0A", "label": "Rejected"},
+    "ignored":   {"emoji": "🙈", "color": "#9CA3AF", "bg": "#F9FAFB", "dark_bg": "#1F2937", "label": "Ignored"},
 }
 
-# ── salary parsing ───────────────────────────────────────────────────────────
+SCORE_THRESHOLDS = {"high": 75, "medium": 50}
+
+
+# ── CSS ───────────────────────────────────────────────────────────────────────
+
+GLOBAL_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+    --radius-sm: 8px;
+    --radius-md: 14px;
+    --radius-lg: 20px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+    --shadow-md: 0 4px 16px rgba(0,0,0,.10), 0 2px 6px rgba(0,0,0,.07);
+    --transition: all 0.22s cubic-bezier(0.4,0,0.2,1);
+    --accent: #6366F1;
+    --accent-light: #EEF2FF;
+}
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+.block-container {
+    padding-top: 1.2rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1400px !important;
+}
+
+#MainMenu, footer, header { visibility: hidden; }
+.stDeployButton { display: none; }
+
+/* ── Page header ── */
+.page-header {
+    background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 50%, #A78BFA 100%);
+    border-radius: var(--radius-lg);
+    padding: 1.8rem 2rem;
+    margin-bottom: 1.5rem;
+    color: white;
+    position: relative;
+    overflow: hidden;
+}
+.page-header::before {
+    content: '';
+    position: absolute;
+    top: -40%; right: -10%;
+    width: 350px; height: 350px;
+    background: rgba(255,255,255,0.07);
+    border-radius: 50%;
+}
+.page-header::after {
+    content: '';
+    position: absolute;
+    bottom: -50%; right: 15%;
+    width: 200px; height: 200px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 50%;
+}
+.page-header h1 {
+    font-size: 2rem !important;
+    font-weight: 800 !important;
+    margin: 0 !important;
+    color: white !important;
+    letter-spacing: -0.03em;
+}
+.page-header p {
+    margin: 0.3rem 0 0 !important;
+    opacity: 0.85;
+    font-size: 0.95rem;
+}
+
+/* ── Demo banner ── */
+.demo-banner {
+    background: linear-gradient(90deg, #FEF3C7, #FDE68A);
+    border: 1px solid #F59E0B;
+    border-radius: var(--radius-sm);
+    padding: 0.6rem 1rem;
+    font-size: 0.85rem;
+    color: #92400E;
+    margin-bottom: 1rem;
+}
+
+/* ── Metric cards ── */
+.metric-card {
+    background: white;
+    border: 1px solid #E5E7EB;
+    border-radius: var(--radius-md);
+    padding: 1rem 1.1rem;
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+    transition: var(--transition);
+    position: relative;
+    overflow: hidden;
+}
+.metric-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.metric-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), #8B5CF6);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.metric-value { font-size: 1.8rem; font-weight: 800; color: #111827; line-height: 1; margin-bottom: 0.25rem; }
+.metric-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: #9CA3AF; }
+.metric-delta { font-size: 0.75rem; font-weight: 500; margin-top: 0.2rem; color: #6B7280; }
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0.5rem;
+    background: transparent !important;
+    border-bottom: 2px solid #E5E7EB;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0 !important;
+    padding: 0.6rem 1.2rem !important;
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    color: #6B7280 !important;
+    background: transparent !important;
+    border: none !important;
+    transition: var(--transition) !important;
+}
+.stTabs [aria-selected="true"] {
+    color: var(--accent) !important;
+    background: #EEF2FF !important;
+    border-bottom: 2px solid var(--accent) !important;
+}
+
+/* ── Job card ── */
+.job-card {
+    background: white;
+    border: 1px solid #E5E7EB;
+    border-radius: var(--radius-md);
+    padding: 1.1rem 1.3rem;
+    margin-bottom: 0.8rem;
+    transition: var(--transition);
+    position: relative;
+    overflow: hidden;
+}
+.job-card:hover { box-shadow: var(--shadow-md); border-color: #C7D2FE; transform: translateY(-1px); }
+.job-card-accent {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 4px;
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+/* ── Score ring ── */
+.score-ring {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    font-size: 1rem;
+    font-weight: 800;
+    border: 3px solid;
+    flex-shrink: 0;
+}
+.score-high   { color: #059669; border-color: #059669; background: #F0FDF4; }
+.score-medium { color: #D97706; border-color: #D97706; background: #FFFBEB; }
+.score-low    { color: #DC2626; border-color: #DC2626; background: #FFF5F5; }
+
+/* ── Status pill ── */
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 0.73rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+/* ── Tag chips ── */
+.tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin: 2px;
+}
+.tag-skill  { background: #EEF2FF; color: #4338CA; border: 1px solid #C7D2FE; }
+.tag-gap    { background: #FFF7ED; color: #C2410C; border: 1px solid #FED7AA; }
+.tag-salary { background: #F0FDF4; color: #15803D; border: 1px solid #BBF7D0; }
+.tag-remote { background: #F0F9FF; color: #0369A1; border: 1px solid #BAE6FD; }
+
+/* ── Job title & meta ── */
+.job-title   { font-size: 1rem; font-weight: 700; color: #111827; line-height: 1.3; }
+.job-company { font-size: 0.88rem; font-weight: 500; color: #6366F1; }
+.job-meta {
+    font-size: 0.78rem; color: #9CA3AF;
+    display: flex; flex-wrap: wrap; gap: 0.6rem;
+    margin-top: 0.35rem; align-items: center;
+}
+.job-meta span { display: flex; align-items: center; gap: 3px; }
+
+/* ── Kanban ── */
+.kanban-col {
+    background: #F9FAFB;
+    border: 1px solid #E5E7EB;
+    border-radius: var(--radius-md);
+    padding: 0.75rem;
+    min-height: 200px;
+}
+.kanban-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 0.6rem; padding-bottom: 0.5rem; border-bottom: 2px solid;
+}
+.kanban-title { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+.kanban-count { font-size: 0.75rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+.kanban-card {
+    background: white; border: 1px solid #E5E7EB;
+    border-radius: var(--radius-sm); padding: 0.65rem 0.8rem;
+    margin-bottom: 0.5rem; transition: var(--transition);
+}
+.kanban-card:hover { box-shadow: var(--shadow-sm); border-color: #C7D2FE; }
+.kanban-card-title  { font-weight: 600; color: #111827; font-size: 0.82rem; line-height: 1.3; margin-bottom: 2px; }
+.kanban-card-company { color: #6B7280; font-size: 0.75rem; }
+.kanban-card-score  { float: right; font-weight: 700; font-size: 0.78rem; padding: 1px 6px; border-radius: 4px; }
+
+/* ── Section divider ── */
+.section-divider { display: flex; align-items: center; gap: 0.75rem; margin: 1.2rem 0 1rem; }
+.section-divider-line { flex: 1; height: 1px; background: #E5E7EB; }
+.section-divider-label {
+    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.09em; color: #9CA3AF; white-space: nowrap;
+}
+
+/* ── Sidebar ── */
+section[data-testid="stSidebar"] { background: #FAFAFA !important; border-right: 1px solid #E5E7EB !important; }
+.sidebar-section-title {
+    font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: #9CA3AF; margin-bottom: 0.5rem;
+}
+
+/* ── Buttons ── */
+.stButton > button {
+    border-radius: var(--radius-sm) !important;
+    font-weight: 600 !important; font-size: 0.8rem !important;
+    transition: var(--transition) !important;
+}
+.stButton > button:hover { transform: translateY(-1px) !important; box-shadow: var(--shadow-sm) !important; }
+.stLinkButton > a {
+    border-radius: var(--radius-sm) !important; font-weight: 600 !important;
+    background: linear-gradient(135deg, #6366F1, #8B5CF6) !important;
+    border: none !important; color: white !important;
+}
+
+/* ── Empty state ── */
+.empty-state { text-align: center; padding: 3rem 1rem; color: #9CA3AF; }
+.empty-state-icon { font-size: 3rem; margin-bottom: 0.75rem; }
+.empty-state-title { font-size: 1.1rem; font-weight: 600; color: #6B7280; margin-bottom: 0.3rem; }
+.empty-state-sub { font-size: 0.85rem; }
+
+/* ── Inputs ── */
+div[data-testid="stTextInput"] input {
+    border-radius: var(--radius-sm) !important;
+    border-color: #E5E7EB !important; font-size: 0.88rem !important;
+}
+div[data-testid="stTextInput"] input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.15) !important;
+}
+div[data-testid="stSelectbox"] > div { border-radius: var(--radius-sm) !important; border-color: #E5E7EB !important; }
+div[data-testid="stAlert"] { border-radius: var(--radius-sm) !important; font-size: 0.85rem !important; }
+</style>
+"""
+
+
+# ── salary parsing ────────────────────────────────────────────────────────────
 
 def parse_salary(salary_str: str) -> dict | None:
-    """
-    Parse salary string into structured dict with min, max, currency, period.
-    Returns None if unparseable.
-
-    Handles:
-      '60 000 – 85 000 Kč'   → {min:60000, max:85000, currency:'CZK', period:'month'}
-      '$18 - $22/hr'          → {min:18, max:22, currency:'USD', period:'hour'}
-    """
     if not salary_str:
         return None
-
-    s = salary_str.replace("\xa0", "").replace("‍", "").replace(" ", "")
-
-    # detect currency and period
+    s = salary_str.replace("\xa0", "").replace("\u200d", "").replace(" ", "")
     currency = "CZK" if "Kč" in s else ("EUR" if "€" in s else "USD")
     period   = "hour" if "/hr" in s.lower() or "/h" in s.lower() else "month"
-
-    # extract all numbers
-    numbers = [int(n.replace(" ", "")) for n in re.findall(r"[\d\s]{2,}", s) if n.strip()]
+    numbers  = [int(n.replace(" ", "")) for n in re.findall(r"[\d\s]{2,}", s) if n.strip()]
     if not numbers:
         return None
-
     return {
-        "min":      numbers[0],
-        "max":      numbers[1] if len(numbers) > 1 else numbers[0],
+        "min": numbers[0],
+        "max": numbers[1] if len(numbers) > 1 else numbers[0],
         "currency": currency,
-        "period":   period,
-        "raw":      salary_str,
+        "period": period,
+        "raw": salary_str,
     }
 
 
 def enrich_salary(df: pd.DataFrame) -> pd.DataFrame:
-    """Add salary_min, salary_max, salary_currency columns for filtering."""
     parsed = df["salary"].fillna("").apply(parse_salary)
     df["salary_min"]      = parsed.apply(lambda p: p["min"]      if p else None)
     df["salary_max"]      = parsed.apply(lambda p: p["max"]      if p else None)
@@ -84,85 +354,17 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-st.markdown("""
-<style>
-    /* global */
-    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
-    h1 { font-size: 1.8rem !important; font-weight: 700 !important; }
-
-    /* job card */
-    .job-card {
-        background: white;
-        border: 1px solid #E5E7EB;
-        border-radius: 12px;
-        padding: 1rem 1.25rem;
-        margin-bottom: 0.75rem;
-        transition: box-shadow 0.15s;
-    }
-    .job-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-
-    /* score badge */
-    .score-badge {
-        display: inline-block;
-        font-size: 1.1rem;
-        font-weight: 700;
-        min-width: 3rem;
-        text-align: center;
-    }
-    .score-high   { color: #059669; }
-    .score-medium { color: #D97706; }
-    .score-low    { color: #DC2626; }
-
-    /* status pill */
-    .status-pill {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 999px;
-        font-size: 0.75rem;
-        font-weight: 600;
-    }
-
-    /* salary chip */
-    .salary-chip {
-        display: inline-block;
-        background: #F0FDF4;
-        color: #15803D;
-        border: 1px solid #BBF7D0;
-        border-radius: 6px;
-        padding: 1px 8px;
-        font-size: 0.78rem;
-        font-weight: 600;
-    }
-
-    /* meta text */
-    .meta { color: #6B7280; font-size: 0.82rem; }
-
-    /* section header */
-    .section-label {
-        font-size: 0.7rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #9CA3AF;
-        margin-bottom: 0.3rem;
-    }
-
-    /* hide streamlit branding */
-    #MainMenu, footer { visibility: hidden; }
-
-    /* tighter selectbox */
-    div[data-testid="stSelectbox"] > div { min-height: 2rem; }
-</style>
-""", unsafe_allow_html=True)
+st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
 
 # ── data loading ──────────────────────────────────────────────────────────────
 
 def _mock_scores(jobs: list[dict]) -> list[dict]:
     random.seed(42)
-    skills_pool = ["SQL", "Python", "BigQuery", "Tableau", "Power BI", "Airflow", "dbt"]
-    gaps_pool   = ["Spark", "Kafka", "ML background", "Java"]
+    skills_pool = ["SQL", "Python", "BigQuery", "Tableau", "Power BI", "Airflow", "dbt", "Spark", "Looker"]
+    gaps_pool   = ["Spark", "Kafka", "ML background", "Java", "Scala"]
+    statuses    = ["new", "saved", "applied", "replied", "interview", "rejected"]
+    weights     = [0.30, 0.20, 0.25, 0.10, 0.10, 0.05]
     out = []
     for j in jobs:
         score = random.randint(40, 95)
@@ -170,12 +372,12 @@ def _mock_scores(jobs: list[dict]) -> list[dict]:
             **j,
             "score":           score,
             "match_summary":   "Demo mode — connect BigQuery to see real AI scoring.",
-            "skills_match":    random.sample(skills_pool, k=random.randint(2, 4)),
+            "skills_match":    random.sample(skills_pool, k=random.randint(2, 5)),
             "gaps":            random.sample(gaps_pool, k=random.randint(0, 2)),
             "seniority_match": score > 60,
             "remote_match":    "remote" in j.get("location", "").lower()
                                or j.get("source") == "remotive",
-            "status":          "new",
+            "status":          random.choices(statuses, weights=weights, k=1)[0],
             "date_scraped":    j.get("scraped_at", "")[:10],
         })
     return out
@@ -215,7 +417,6 @@ def load_jobs() -> pd.DataFrame:
 
 
 def save_status(job_id: str, new_status: str) -> None:
-    """Persist in session_state (demo) or BigQuery (live)."""
     st.session_state.status_overrides[job_id] = new_status
     if not DEMO_MODE:
         from google.cloud import bigquery
@@ -229,183 +430,399 @@ def save_status(job_id: str, new_status: str) -> None:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def score_html(score) -> str:
+def score_class(score) -> str:
     if pd.isna(score):
-        return '<span class="score-badge">—</span>'
+        return "score-medium"
     s = int(score)
-    cls = "score-high" if s >= 75 else ("score-medium" if s >= 50 else "score-low")
-    return f'<span class="score-badge {cls}">{s}</span>'
+    if s >= SCORE_THRESHOLDS["high"]:   return "score-high"
+    if s >= SCORE_THRESHOLDS["medium"]: return "score-medium"
+    return "score-low"
 
 
-def status_pill(status: str) -> str:
-    emoji, color, bg = STATUS_STYLE.get(status, ("", "#6B7280", "#F3F4F6"))
+def score_ring_html(score) -> str:
+    if pd.isna(score):
+        return '<div class="score-ring score-medium">—</div>'
+    s = int(score)
+    return f'<div class="score-ring {score_class(score)}">{s}</div>'
+
+
+def status_pill_html(status: str) -> str:
+    cfg = STATUS_CONFIG.get(status, STATUS_CONFIG["new"])
     return (
-        f'<span class="status-pill" style="background:{bg};color:{color}">'
-        f'{emoji} {status}</span>'
+        f'<span class="status-pill" style="background:{cfg["bg"]};color:{cfg["color"]}">'
+        f'{cfg["emoji"]} {cfg["label"]}</span>'
+    )
+
+
+def tag_html(text: str, kind: str = "skill") -> str:
+    icons = {"skill": "✓", "gap": "△", "salary": "💰", "remote": "🌐"}
+    return f'<span class="tag-chip tag-{kind}">{icons.get(kind,"")} {text}</span>'
+
+
+def section_divider(label: str) -> None:
+    st.markdown(
+        f'<div class="section-divider">'
+        f'<div class="section-divider-line"></div>'
+        f'<div class="section-divider-label">{label}</div>'
+        f'<div class="section-divider-line"></div>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
-    st.sidebar.markdown("## Filters")
+    with st.sidebar:
+        st.markdown("""
+        <div style="padding:0.5rem 0 1rem; text-align:center;">
+            <div style="font-size:1.8rem;">🎯</div>
+            <div style="font-weight:800;font-size:1.1rem;color:#111827;">Job Tracker</div>
+            <div style="font-size:0.75rem;color:#9CA3AF;margin-top:2px;">AI-powered job hunt</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    min_score = st.sidebar.slider("Min score", 0, 100, 50, step=5)
+        st.markdown('<div class="sidebar-section-title">🔍 Search</div>', unsafe_allow_html=True)
+        search_query = st.text_input("Search jobs", placeholder="Title, company, skill…", label_visibility="collapsed")
 
-    sources = ["All"] + sorted(df["source"].dropna().unique().tolist())
-    source  = st.sidebar.selectbox("Source", sources)
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-section-title">⚡ Match Score</div>', unsafe_allow_html=True)
+        min_score = st.slider("Minimum score", 0, 100, 50, step=5, label_visibility="collapsed")
 
-    status_filter = st.sidebar.multiselect(
-        "Status", STATUSES, default=["new", "saved", "applied", "replied", "interview"]
-    )
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-section-title">📡 Source</div>', unsafe_allow_html=True)
+        sources = ["All"] + sorted(df["source"].dropna().unique().tolist())
+        source  = st.selectbox("Source", sources, label_visibility="collapsed")
 
-    remote_only = st.sidebar.checkbox("Remote only", value=False)
-
-    st.sidebar.markdown("**Salary (CZK/month)**")
-    czk_jobs = df[df["salary_currency"] == "CZK"]
-    if not czk_jobs.empty:
-        czk_min = int(czk_jobs["salary_min"].dropna().min())
-        czk_max = int(czk_jobs["salary_max"].dropna().max())
-        salary_range = st.sidebar.slider(
-            "CZK range",
-            min_value=czk_min,
-            max_value=czk_max,
-            value=(czk_min, czk_max),
-            step=5_000,
-            format="%d Kč",
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-section-title">📋 Status</div>', unsafe_allow_html=True)
+        status_filter = st.multiselect(
+            "Status",
+            options=STATUSES,
+            default=["new", "saved", "applied", "replied", "interview"],
+            format_func=lambda s: f"{STATUS_CONFIG[s]['emoji']} {STATUS_CONFIG[s]['label']}",
             label_visibility="collapsed",
         )
-    else:
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-section-title">🎛️ Options</div>', unsafe_allow_html=True)
+        remote_only = st.toggle("Remote only", value=False)
+        salary_only = st.toggle("Has salary listed", value=False)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        czk_jobs = df[df["salary_currency"] == "CZK"]
         salary_range = None
-    salary_only = st.sidebar.checkbox("Show only jobs with salary listed", value=False)
+        if not czk_jobs.empty:
+            st.markdown('<div class="sidebar-section-title">💰 Salary Range (CZK/month)</div>', unsafe_allow_html=True)
+            czk_min = int(czk_jobs["salary_min"].dropna().min())
+            czk_max = int(czk_jobs["salary_max"].dropna().max())
+            salary_range = st.slider(
+                "CZK range", min_value=czk_min, max_value=czk_max,
+                value=(czk_min, czk_max), step=5_000, format="%d Kč",
+                label_visibility="collapsed",
+            )
+            st.markdown("<br>", unsafe_allow_html=True)
 
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🔄 Refresh", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-    st.sidebar.caption(f"Updated {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+        st.markdown('<div class="sidebar-section-title">↕️ Sort By</div>', unsafe_allow_html=True)
+        sort_by = st.selectbox(
+            "Sort",
+            ["Score (high→low)", "Score (low→high)", "Date (newest)", "Company (A→Z)"],
+            label_visibility="collapsed",
+        )
 
-    f = df[df["score"] >= min_score].copy()
-    if source != "All":
-        f = f[f["source"] == source]
-    if status_filter:
-        f = f[f["status"].isin(status_filter)]
-    if remote_only:
-        f = f[f["remote_match"] == True]
-    if salary_only:
-        f = f[f["salary"].notna() & (f["salary"] != "")]
+        st.markdown("<br>", unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Refresh", use_container_width=True):
+                st.cache_data.clear()
+                st.rerun()
+        with col2:
+            if st.button("🗑️ Reset", use_container_width=True):
+                st.session_state.status_overrides = {}
+                st.rerun()
+
+        st.markdown(
+            f'<div style="text-align:center;font-size:0.72rem;color:#9CA3AF;margin-top:0.75rem;">'
+            f'Updated {datetime.now(timezone.utc).strftime("%H:%M UTC")}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Apply filters ──
+    f = df.copy()
+
+    if search_query:
+        q = search_query.lower()
+        mask = (
+            f["title"].str.lower().str.contains(q, na=False) |
+            f["company"].str.lower().str.contains(q, na=False) |
+            f["location"].str.lower().str.contains(q, na=False)
+        )
+        f = f[mask]
+
+    f = f[f["score"] >= min_score]
+    if source != "All":         f = f[f["source"] == source]
+    if status_filter:           f = f[f["status"].isin(status_filter)]
+    if remote_only:             f = f[f["remote_match"] == True]
+    if salary_only:             f = f[f["salary"].notna() & (f["salary"] != "")]
+
     if salary_range and not czk_jobs.empty:
         lo, hi = salary_range
-        # keep jobs with no CZK salary (unaffected) + CZK jobs within range
-        no_czk  = f[f["salary_currency"] != "CZK"]
-        in_czk  = f[
-            (f["salary_currency"] == "CZK") &
-            (f["salary_min"] <= hi) &
-            (f["salary_max"] >= lo)
-        ]
-        f = pd.concat([no_czk, in_czk]).sort_values("score", ascending=False)
-    return f
+        no_czk = f[f["salary_currency"] != "CZK"]
+        in_czk = f[(f["salary_currency"] == "CZK") & (f["salary_min"] <= hi) & (f["salary_max"] >= lo)]
+        f = pd.concat([no_czk, in_czk])
+
+    sort_map = {
+        "Score (high→low)": ("score", False),
+        "Score (low→high)": ("score", True),
+        "Date (newest)":    ("date_scraped", False),
+        "Company (A→Z)":    ("company", True),
+    }
+    col, asc = sort_map.get(sort_by, ("score", False))
+    f = f.sort_values(col, ascending=asc)
+
+    return f.reset_index(drop=True)
 
 
 # ── metrics bar ───────────────────────────────────────────────────────────────
 
 def render_metrics(df: pd.DataFrame, filtered: pd.DataFrame) -> None:
-    cols = st.columns(6)
+    avg_score       = f"{filtered['score'].mean():.0f}" if len(filtered) else "—"
+    with_salary     = int((filtered["salary"].fillna("") != "").sum())
+    applied_count   = len(df[df["status"] == "applied"])
+    interview_count = len(df[df["status"] == "interview"])
+
     metrics = [
-        ("Total",     len(df)),
-        ("Showing",   len(filtered)),
-        ("Avg score", f"{filtered['score'].mean():.0f}" if len(filtered) else "—"),
-        ("w/ Salary", int((filtered["salary"].fillna("") != "").sum())),
-        ("Applied",   len(df[df["status"] == "applied"])),
-        ("Interview", len(df[df["status"] == "interview"])),
+        ("Total Jobs",  len(df),           None),
+        ("Showing",     len(filtered),      f"{len(filtered)/max(len(df),1)*100:.0f}% of total"),
+        ("Avg Score",   avg_score,          "match quality"),
+        ("With Salary", with_salary,        "listed"),
+        ("Applied",     applied_count,      "in pipeline"),
+        ("Interviews",  interview_count,    "🎉" if interview_count > 0 else "keep going"),
     ]
-    for col, (label, val) in zip(cols, metrics):
-        col.metric(label, val)
+
+    for col, (label, val, delta) in zip(st.columns(6), metrics):
+        delta_html = f'<div class="metric-delta">{delta}</div>' if delta else ""
+        col.markdown(
+            f'<div class="metric-card">'
+            f'<div class="metric-value">{val}</div>'
+            f'<div class="metric-label">{label}</div>'
+            f'{delta_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+# ── analytics ─────────────────────────────────────────────────────────────────
+
+def render_analytics(df: pd.DataFrame, filtered: pd.DataFrame) -> None:
+    section_divider("Analytics Overview")
+    c1, c2, c3 = st.columns(3)
+
+    # Score distribution
+    with c1:
+        fig = px.histogram(
+            filtered, x="score", nbins=20, title="Score Distribution",
+            color_discrete_sequence=["#6366F1"], labels={"score": "Match Score"},
+        )
+        fig.update_layout(
+            plot_bgcolor="white", paper_bgcolor="white", font_family="Inter",
+            title_font_size=14, title_font_color="#111827",
+            margin=dict(l=10, r=10, t=40, b=10), height=240, showlegend=False,
+            xaxis=dict(showgrid=False, color="#9CA3AF"),
+            yaxis=dict(showgrid=True, gridcolor="#F3F4F6", color="#9CA3AF"),
+        )
+        if len(filtered):
+            fig.add_vline(
+                x=filtered["score"].mean(), line_dash="dash", line_color="#8B5CF6",
+                annotation_text=f"avg {filtered['score'].mean():.0f}",
+                annotation_font_color="#8B5CF6", annotation_font_size=11,
+            )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    # Pipeline status bar
+    with c2:
+        status_counts = df.groupby("status").size().reset_index(name="count")
+        status_counts["label"] = status_counts["status"].apply(
+            lambda s: f"{STATUS_CONFIG.get(s,{}).get('emoji','')} {s.title()}"
+        )
+        fig2 = px.bar(
+            status_counts, x="label", y="count", title="Pipeline Status",
+            color="status",
+            color_discrete_map={s: STATUS_CONFIG[s]["color"] for s in STATUS_CONFIG},
+            labels={"label": "", "count": "Jobs"},
+        )
+        fig2.update_layout(
+            plot_bgcolor="white", paper_bgcolor="white", font_family="Inter",
+            title_font_size=14, title_font_color="#111827",
+            margin=dict(l=10, r=10, t=40, b=10), height=240, showlegend=False,
+            xaxis=dict(showgrid=False, color="#9CA3AF", tickfont_size=11),
+            yaxis=dict(showgrid=True, gridcolor="#F3F4F6", color="#9CA3AF"),
+        )
+        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+
+    # Source donut
+    with c3:
+        source_counts = filtered.groupby("source").size().reset_index(name="count")
+        fig3 = px.pie(
+            source_counts, values="count", names="source", title="Jobs by Source",
+            color_discrete_sequence=px.colors.qualitative.Pastel, hole=0.55,
+        )
+        fig3.update_layout(
+            font_family="Inter", title_font_size=14, title_font_color="#111827",
+            margin=dict(l=10, r=10, t=40, b=10), height=240,
+            legend=dict(font_size=11, orientation="v", x=1.0, y=0.5),
+        )
+        fig3.update_traces(textposition="inside", textinfo="percent", textfont_size=11)
+        st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
 
 
 # ── job cards ─────────────────────────────────────────────────────────────────
 
 def render_cards(filtered: pd.DataFrame) -> None:
     if filtered.empty:
-        st.info("No jobs match the current filters.")
+        st.markdown("""
+        <div class="empty-state">
+            <div class="empty-state-icon">🔍</div>
+            <div class="empty-state-title">No jobs match your filters</div>
+            <div class="empty-state-sub">Try adjusting the score threshold or status filters in the sidebar.</div>
+        </div>
+        """, unsafe_allow_html=True)
         return
+
+    section_divider(f"{len(filtered)} Jobs Found")
 
     for _, job in filtered.iterrows():
         job_id  = job["job_id"]
         current = st.session_state.status_overrides.get(job_id, job.get("status", "new"))
         salary  = job.get("salary", "") or ""
-        with st.container():
-            st.markdown('<div class="job-card">', unsafe_allow_html=True)
+        s       = int(job["score"]) if not pd.isna(job.get("score")) else 0
+        accent  = "#059669" if s >= 75 else ("#D97706" if s >= 50 else "#DC2626")
 
-            # — top row: score | title + company | status selector
+        with st.container():
+            st.markdown(
+                f'<div class="job-card"><div class="job-card-accent" style="background:{accent};"></div>',
+                unsafe_allow_html=True,
+            )
+
             c_score, c_main, c_status = st.columns([1, 7, 2])
 
             with c_score:
-                st.markdown(score_html(job["score"]), unsafe_allow_html=True)
+                st.markdown(score_ring_html(job["score"]), unsafe_allow_html=True)
 
             with c_main:
                 st.markdown(
-                    f"**{job['title']}** &nbsp;·&nbsp; {job['company']}",
+                    f'<div class="job-title">{job["title"]}</div>'
+                    f'<div class="job-company">{job["company"]}</div>',
                     unsafe_allow_html=True,
                 )
-                meta_parts = [f"📍 {job['location']}", f"🔗 {job['source']}"]
+                meta_items = [f'<span>📍 {job["location"]}</span>', f'<span>📡 {job["source"]}</span>']
                 if salary:
-                    currency = job.get("salary_currency", "")
-                    period   = job.get("salary_period", "")
-                    period_label = "/hr" if period == "hour" else "/mo"
-                    meta_parts.append(f"💰 {salary} {period_label}" if currency != "CZK" else f"💰 {salary}")
+                    meta_items.append(f'<span class="tag-chip tag-salary">💰 {salary}</span>')
+                if job.get("remote_match"):
+                    meta_items.append('<span class="tag-chip tag-remote">🌐 Remote</span>')
                 if job.get("date_scraped"):
-                    meta_parts.append(f"📅 {job['date_scraped']}")
-                st.markdown(
-                    '<span class="meta">' + " &nbsp;|&nbsp; ".join(meta_parts) + "</span>",
-                    unsafe_allow_html=True,
-                )
+                    meta_items.append(f'<span>🗓 {job["date_scraped"]}</span>')
+                st.markdown(f'<div class="job-meta">{"".join(meta_items)}</div>', unsafe_allow_html=True)
 
             with c_status:
+                st.markdown(status_pill_html(current), unsafe_allow_html=True)
                 new_status = st.selectbox(
-                    "Status",
-                    STATUSES,
+                    "Update status", STATUSES,
                     index=STATUSES.index(current) if current in STATUSES else 0,
-                    key=f"sel_{job_id}",
-                    label_visibility="collapsed",
+                    key=f"sel_{job_id}", label_visibility="collapsed",
+                    format_func=lambda s: f"{STATUS_CONFIG[s]['emoji']} {STATUS_CONFIG[s]['label']}",
                 )
                 if new_status != current:
                     save_status(job_id, new_status)
                     st.rerun()
 
-            # — detail expander
-            with st.expander("View details"):
+            with st.expander("✦ View details & AI analysis"):
                 d1, d2, d3 = st.columns(3)
-                d1.metric("Match score", f"{int(job['score'])}/100" if not pd.isna(job.get('score')) else "—")
-                d2.metric("Remote", "✅ Yes" if job.get("remote_match") else "❌ No")
-                d3.metric("Seniority", "✅ Yes" if job.get("seniority_match") else "❌ No")
+                d1.metric("Match Score", f"{int(job['score'])}/100" if not pd.isna(job.get("score")) else "—")
+                d2.metric("Remote Fit",    "✅ Yes" if job.get("remote_match")   else "❌ No")
+                d3.metric("Seniority Fit", "✅ Yes" if job.get("seniority_match") else "❌ No")
 
                 if job.get("match_summary"):
-                    st.markdown("**Why it matches**")
-                    st.write(job["match_summary"])
+                    st.markdown(
+                        f'<div style="background:#F9FAFB;border-left:3px solid #6366F1;'
+                        f'padding:0.6rem 0.8rem;border-radius:0 6px 6px 0;'
+                        f'font-size:0.85rem;color:#374151;margin:0.5rem 0;">'
+                        f'<strong>AI Analysis:</strong> {job["match_summary"]}</div>',
+                        unsafe_allow_html=True,
+                    )
 
                 sc_col, gap_col = st.columns(2)
                 with sc_col:
                     skills = job.get("skills_match") or []
                     if isinstance(skills, str):
-                        skills = json.loads(skills)
+                        try: skills = json.loads(skills)
+                        except: skills = []
                     if skills:
-                        st.markdown("**Matching skills**")
-                        for s in skills:
-                            st.markdown(f"- ✅ {s}")
+                        st.markdown("**Matching Skills**")
+                        st.markdown(" ".join(tag_html(s, "skill") for s in skills), unsafe_allow_html=True)
 
                 with gap_col:
                     gaps = job.get("gaps") or []
                     if isinstance(gaps, str):
-                        gaps = json.loads(gaps)
+                        try: gaps = json.loads(gaps)
+                        except: gaps = []
                     if gaps:
-                        st.markdown("**Gaps**")
-                        for g in gaps:
-                            st.markdown(f"- ⚠️ {g}")
+                        st.markdown("**Skill Gaps**")
+                        st.markdown(" ".join(tag_html(g, "gap") for g in gaps), unsafe_allow_html=True)
 
-                st.link_button("Open job posting ↗", job["url"], use_container_width=True)
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.link_button("Open Job Posting ↗", job["url"], use_container_width=True)
 
-            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── kanban ────────────────────────────────────────────────────────────────────
+
+def render_kanban(df: pd.DataFrame) -> None:
+    section_divider("Pipeline Board")
+    cols = st.columns(len(STATUSES))
+
+    for col, status in zip(cols, STATUSES):
+        cfg   = STATUS_CONFIG[status]
+        jobs  = df[df["status"] == status]
+        count = len(jobs)
+
+        with col:
+            st.markdown(
+                f'<div class="kanban-col">'
+                f'<div class="kanban-header" style="border-color:{cfg["color"]}">'
+                f'<span class="kanban-title" style="color:{cfg["color"]}">{cfg["emoji"]} {cfg["label"]}</span>'
+                f'<span class="kanban-count" style="background:{cfg["bg"]};color:{cfg["color"]}">{count}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            if jobs.empty:
+                st.markdown(
+                    '<div style="text-align:center;padding:1rem;color:#D1D5DB;font-size:0.8rem;">Empty</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                for _, job in jobs.head(8).iterrows():
+                    s           = int(job["score"]) if not pd.isna(job.get("score")) else 0
+                    score_color = "#059669" if s >= 75 else ("#D97706" if s >= 50 else "#DC2626")
+                    score_bg    = "#F0FDF4" if s >= 75 else ("#FFFBEB" if s >= 50 else "#FFF5F5")
+                    title       = job["title"][:35] + ("…" if len(job["title"]) > 35 else "")
+                    company     = job["company"][:28] + ("…" if len(job["company"]) > 28 else "")
+                    st.markdown(
+                        f'<div class="kanban-card">'
+                        f'<span class="kanban-card-score" style="color:{score_color};background:{score_bg}">{s}</span>'
+                        f'<div class="kanban-card-title">{title}</div>'
+                        f'<div class="kanban-card-company">{company}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                if count > 8:
+                    st.markdown(
+                        f'<div style="text-align:center;font-size:0.75rem;color:#9CA3AF;padding:0.3rem;">+{count-8} more</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -414,14 +831,20 @@ def main():
     if "status_overrides" not in st.session_state:
         st.session_state.status_overrides = {}
 
-    st.markdown("# 🎯 AI Job Tracker")
+    st.markdown("""
+    <div class="page-header">
+        <h1>🎯 AI Job Tracker</h1>
+        <p>Your intelligent job hunting command center — track, analyze, and win.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     if DEMO_MODE:
-        st.warning(
-            "**Demo mode** — scores are illustrative. "
-            "Add GCP credentials to `.env` to enable real Claude scoring.",
-            icon="⚠️",
-        )
+        st.markdown("""
+        <div class="demo-banner">
+            ⚠️ <strong>Demo Mode</strong> — Scores are illustrative.
+            Add GCP credentials to <code>.env</code> to enable real AI scoring via Claude.
+        </div>
+        """, unsafe_allow_html=True)
 
     try:
         df = load_jobs()
@@ -430,22 +853,39 @@ def main():
         st.stop()
 
     if df.empty:
-        st.warning("No jobs yet. Run `python -m scraper.scrape` first.")
+        st.markdown("""
+        <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <div class="empty-state-title">No jobs yet</div>
+            <div class="empty-state-sub">Run <code>python -m scraper.scrape</code> to fetch your first batch of jobs.</div>
+        </div>
+        """, unsafe_allow_html=True)
         st.stop()
 
     df = enrich_salary(df)
 
-    # apply session_state status overrides so changes persist within session
     if st.session_state.status_overrides:
         df["status"] = df.apply(
-            lambda r: st.session_state.status_overrides.get(r["job_id"], r["status"]),
-            axis=1,
+            lambda r: st.session_state.status_overrides.get(r["job_id"], r["status"]), axis=1
         )
 
     filtered = render_sidebar(df)
     render_metrics(df, filtered)
-    st.markdown("---")
-    render_cards(filtered)
+
+    tab_list, tab_kanban, tab_analytics = st.tabs([
+        "📋  Job List",
+        "🗂  Pipeline Board",
+        "📊  Analytics",
+    ])
+
+    with tab_list:
+        render_cards(filtered)
+
+    with tab_kanban:
+        render_kanban(df)
+
+    with tab_analytics:
+        render_analytics(df, filtered)
 
 
 if __name__ == "__main__":
