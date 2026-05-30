@@ -3,10 +3,13 @@ storage/bigquery.py
 
 Loads scored jobs from data/scored_jobs.json into BigQuery.
 Idempotent — safe to re-run, skips already-loaded job_ids.
+
+Uses load jobs (not streaming inserts) — compatible with BigQuery free tier.
 """
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -29,8 +32,8 @@ TABLE_SCHEMA = [
     bigquery.SchemaField("scraped_at",      "TIMESTAMP", mode="NULLABLE"),
     bigquery.SchemaField("score",           "INTEGER",   mode="NULLABLE"),
     bigquery.SchemaField("match_summary",   "STRING",    mode="NULLABLE"),
-    bigquery.SchemaField("skills_match",    "STRING",    mode="REPEATED"),
-    bigquery.SchemaField("gaps",            "STRING",    mode="REPEATED"),
+    bigquery.SchemaField("skills_match",    "STRING",    mode="NULLABLE"),
+    bigquery.SchemaField("gaps",            "STRING",    mode="NULLABLE"),
     bigquery.SchemaField("seniority_match", "BOOLEAN",   mode="NULLABLE"),
     bigquery.SchemaField("remote_match",    "BOOLEAN",   mode="NULLABLE"),
     bigquery.SchemaField("status",          "STRING",    mode="NULLABLE"),
@@ -39,20 +42,19 @@ TABLE_SCHEMA = [
 
 
 def get_client() -> bigquery.Client:
-    project = os.environ["GCP_PROJECT_ID"]
+    project    = os.environ["GCP_PROJECT_ID"]
     creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
     if creds_json:
-        info = json.loads(creds_json)
+        info  = json.loads(creds_json)
         creds = service_account.Credentials.from_service_account_info(
-            info,
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
         )
         return bigquery.Client(project=project, credentials=creds)
     return bigquery.Client(project=project)
 
 
 def ensure_table(client: bigquery.Client, table_ref: str) -> None:
-    dataset_id = os.environ["BQ_DATASET"]
+    dataset_id  = os.environ["BQ_DATASET"]
     dataset_ref = bigquery.DatasetReference(client.project, dataset_id)
 
     try:
@@ -73,7 +75,7 @@ def ensure_table(client: bigquery.Client, table_ref: str) -> None:
         print(f"[bigquery] created table {table_ref}")
 
 
-def get_existing_ids(client: bigquery.Client, table_ref: str) -> set[str]:
+def get_existing_ids(client: bigquery.Client, table_ref: str) -> set:
     try:
         result = client.query(f"SELECT job_id FROM `{table_ref}`")
         return {row.job_id for row in result}
@@ -81,38 +83,70 @@ def get_existing_ids(client: bigquery.Client, table_ref: str) -> set[str]:
         return set()
 
 
-def load_jobs(jobs: list[dict], client: bigquery.Client, table_ref: str) -> int:
+def load_jobs(jobs: list, client: bigquery.Client, table_ref: str) -> int:
     if not jobs:
         print("[bigquery] no jobs to load")
         return 0
 
     now = datetime.now(timezone.utc).isoformat()
-    rows = [
-        {
+
+    # skills_match and gaps are stored as JSON strings (not REPEATED)
+    # so we normalise them here
+    rows = []
+    for j in jobs:
+        skills = j.get("skills_match", [])
+        gaps   = j.get("gaps", [])
+
+        # Handle both list and JSON string formats
+        if isinstance(skills, list):
+            skills = json.dumps(skills, ensure_ascii=False)
+        if isinstance(gaps, list):
+            gaps = json.dumps(gaps, ensure_ascii=False)
+
+        rows.append({
             "job_id":          j.get("job_id", ""),
             "title":           j.get("title", ""),
             "company":         j.get("company", ""),
             "location":        j.get("location", ""),
             "url":             j.get("url", ""),
             "source":          j.get("source", ""),
-            "salary":          j.get("salary", ""),
+            "salary":          j.get("salary", "") or "",
             "scraped_at":      j.get("scraped_at", now),
             "score":           j.get("score"),
             "match_summary":   j.get("match_summary", ""),
-            "skills_match":    j.get("skills_match", []),
-            "gaps":            j.get("gaps", []),
+            "skills_match":    skills,
+            "gaps":            gaps,
             "seniority_match": j.get("seniority_match"),
             "remote_match":    j.get("remote_match"),
             "status":          j.get("status", "new"),
             "loaded_at":       now,
-        }
-        for j in jobs
-    ]
+        })
 
-    errors = client.insert_rows_json(table_ref, rows)
-    if errors:
-        print(f"[bigquery] insert errors: {errors}")
-        raise RuntimeError("BigQuery insert failed")
+    # Write rows to a temp newline-delimited JSON file and load via job
+    # (streaming inserts are not available on the free tier)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
+    ) as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        tmp_path = f.name
+
+    job_config = bigquery.LoadJobConfig(
+        schema=TABLE_SCHEMA,
+        source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+    )
+
+    with open(tmp_path, "rb") as f:
+        load_job = client.load_table_from_file(f, table_ref, job_config=job_config)
+
+    load_job.result()  # wait for completion
+
+    os.unlink(tmp_path)
+
+    if load_job.errors:
+        print(f"[bigquery] load errors: {load_job.errors}")
+        raise RuntimeError("BigQuery load job failed")
 
     print(f"[bigquery] inserted {len(rows)} rows into {table_ref}")
     return len(rows)
@@ -126,13 +160,13 @@ def run() -> None:
     jobs = json.loads(SCORED_JOBS_PATH.read_text(encoding="utf-8"))
     print(f"[bigquery] loaded {len(jobs)} scored jobs from file")
 
-    client = get_client()
+    client    = get_client()
     table_ref = f"{client.project}.{os.environ['BQ_DATASET']}.{os.environ['BQ_TABLE']}"
 
     ensure_table(client, table_ref)
 
     existing_ids = get_existing_ids(client, table_ref)
-    new_jobs = [j for j in jobs if j.get("job_id") not in existing_ids]
+    new_jobs     = [j for j in jobs if j.get("job_id") not in existing_ids]
     print(f"[bigquery] {len(new_jobs)} new jobs to insert (skipping {len(jobs) - len(new_jobs)} already loaded)")
 
     load_jobs(new_jobs, client, table_ref)
