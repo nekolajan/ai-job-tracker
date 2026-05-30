@@ -42,7 +42,7 @@ jobs:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           BQ_DATASET: ${{ secrets.BQ_DATASET }}
           BQ_TABLE: ${{ secrets.BQ_TABLE }}
-          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GCP_SA_KEY }}
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
         run: python -m scraper.scrape
 
       - name: Score jobs with Claude API
@@ -51,7 +51,7 @@ jobs:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           BQ_DATASET: ${{ secrets.BQ_DATASET }}
           BQ_TABLE: ${{ secrets.BQ_TABLE }}
-          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GCP_SA_KEY }}
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
         run: python -m enrichment.score
 
       - name: Load to BigQuery
@@ -59,5 +59,5 @@ jobs:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           BQ_DATASET: ${{ secrets.BQ_DATASET }}
           BQ_TABLE: ${{ secrets.BQ_TABLE }}
-          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GCP_SA_KEY }}
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
         run: python -m storage.bigquery
