@@ -1,7 +1,7 @@
 """
 scraper/scrape.py
 
-Fetches job listings from Remotive, The Muse, jobs.cz, and LinkedIn.
+Fetches job listings from Remotive, The Muse, jobs.cz, LinkedIn, and Jobstack.it.
 Saves deduplicated results to data/raw_jobs.json.
 """
 
@@ -199,18 +199,13 @@ def fetch_jobs_cz() -> list[dict]:
 # ── source: LinkedIn (public, no login) ──────────────────────────────────────
 
 def fetch_linkedin() -> list[dict]:
-    """
-    Scrapes LinkedIn's public job search (no login required).
-    Searches remote roles globally + Prague on-site roles separately.
-    """
     cfg = SOURCES["linkedin"]
     if not cfg.enabled:
         return []
 
     searches = [
-        # (keywords, location, remote_filter)
-        ("data analyst BI", "Worldwide", "2"),   # f_WT=2 = remote
-        ("data analyst BI", "Prague", ""),        # Prague on-site/hybrid
+        ("data analyst BI", "Worldwide", "2"),
+        ("data analyst BI", "Prague", ""),
         ("business intelligence", "Worldwide", "2"),
     ]
 
@@ -220,8 +215,8 @@ def fetch_linkedin() -> list[dict]:
             params = {
                 "keywords": keywords,
                 "location": location,
-                "f_E":      "4",       # experience: Senior
-                "sortBy":   "DD",      # date descending
+                "f_E":      "4",
+                "sortBy":   "DD",
             }
             if remote:
                 params["f_WT"] = remote
@@ -248,7 +243,7 @@ def fetch_linkedin() -> list[dict]:
                 if not is_relevant(title):
                     continue
 
-                url = link_el["href"].split("?")[0]  # strip tracking params
+                url = link_el["href"].split("?")[0]
                 results.append({
                     "job_id":      make_id(url),
                     "title":       title,
@@ -266,6 +261,101 @@ def fetch_linkedin() -> list[dict]:
     return results
 
 
+# ── source: Jobstack.it ───────────────────────────────────────────────────────
+
+def fetch_jobstack() -> list[dict]:
+    """
+    Scrapes jobstack.it Data (BI, DWH, BigData) category.
+    Fetches multiple pages until no more results.
+    """
+    BASE_URL = "https://www.jobstack.it"
+    CATEGORY_URL = f"{BASE_URL}/it-jobs/specialista-data-bi-dwh-bigdata"
+    results = []
+    page = 1
+    max_pages = 5  # at most 5 pages (~100 jobs)
+
+    while page <= max_pages:
+        try:
+            url = CATEGORY_URL if page == 1 else f"{CATEGORY_URL}?page={page}"
+            resp = requests.get(
+                url,
+                headers={**_HEADERS, "Accept-Language": "cs,en;q=0.9"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Job listings are <li> elements containing links to /it-job/...
+            job_links = soup.select("ul li a[href*='/it-job/']")
+
+            if not job_links:
+                break
+
+            new_on_page = 0
+            for link in job_links:
+                href = link.get("href", "")
+                if not href:
+                    continue
+
+                full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
+
+                # Extract title from link text, stripping extra whitespace
+                raw_text = link.get_text(separator=" ", strip=True)
+
+                # Title is usually the first line / sentence before role tags
+                # Clean up common suffixes like "Freelancer HPP Hybrid Senior..."
+                title = raw_text.split("  ")[0].strip()
+                if not title or len(title) < 4:
+                    continue
+
+                # Extract salary — look for "až X Kč" or "Navrhni si mzdu" pattern
+                salary = ""
+                salary_patterns = ["až ", "Navrhni si mzdu", "od "]
+                for part in raw_text.split("  "):
+                    part = part.strip()
+                    if any(p in part for p in salary_patterns):
+                        salary = part
+                        break
+
+                # Extract location — text after company name, before salary
+                # Try to find it in the link text parts
+                location = "Praha"
+                parts = [p.strip() for p in raw_text.split("  ") if p.strip()]
+                for part in parts:
+                    if any(city in part for city in ["Praha", "Brno", "Ostrava", "Plzeň", "remote", "Remote", "hybrid", "Hybrid"]):
+                        location = part
+                        break
+
+                results.append({
+                    "job_id":      make_id(full_url),
+                    "title":       title,
+                    "company":     "",  # not easily extractable from list view
+                    "location":    location,
+                    "description": "",
+                    "url":         full_url,
+                    "source":      "jobstack",
+                    "salary":      salary,
+                    "scraped_at":  _now(),
+                })
+                new_on_page += 1
+
+            print(f"[jobstack] page {page}: {new_on_page} jobs")
+
+            # Check if there's a next page
+            next_link = soup.select_one(f"a[href*='page={page + 1}']")
+            if not next_link:
+                break
+
+            page += 1
+            time.sleep(2.0)
+
+        except Exception as e:
+            print(f"[jobstack] error on page {page}: {e}")
+            break
+
+    return results
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def scrape_all() -> None:
@@ -273,10 +363,11 @@ def scrape_all() -> None:
     before = len(existing)
 
     sources = [
-        ("remotive", fetch_remotive),
-        ("the_muse", fetch_the_muse),
-        ("jobs_cz",  fetch_jobs_cz),
-        ("linkedin", fetch_linkedin),
+        ("remotive",  fetch_remotive),
+        ("the_muse",  fetch_the_muse),
+        ("jobs_cz",   fetch_jobs_cz),
+        ("linkedin",  fetch_linkedin),
+        ("jobstack",  fetch_jobstack),
     ]
 
     for name, fetch_fn in sources:
