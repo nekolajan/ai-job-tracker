@@ -237,6 +237,14 @@ html, body, [class*="css"] {
 /* ── Job title & meta ── */
 .job-title   { font-size: 1rem; font-weight: 700; color: #111827 !important; line-height: 1.3; }
 .job-company { font-size: 0.88rem; font-weight: 500; color: #6366F1 !important; }
+
+/* Force text colors inside Streamlit markdown containers */
+[data-testid="stMarkdownContainer"] .job-title { color: #111827 !important; }
+[data-testid="stMarkdownContainer"] .job-company { color: #6366F1 !important; }
+[data-testid="stMarkdownContainer"] .job-meta { color: #9CA3AF !important; }
+[data-testid="stMarkdownContainer"] .kanban-card-title { color: #111827 !important; }
+[data-testid="stMarkdownContainer"] .kanban-card-company { color: #6B7280 !important; }
+[data-testid="stMarkdownContainer"] .metric-value { color: #111827 !important; }
 .job-meta {
     font-size: 0.78rem; color: #9CA3AF;
     display: flex; flex-wrap: wrap; gap: 0.6rem;
