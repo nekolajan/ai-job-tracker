@@ -263,95 +263,158 @@ def fetch_linkedin() -> list[dict]:
 
 # ── source: Jobstack.it ───────────────────────────────────────────────────────
 
+# Role/contract tags that appear in the link text — used to find title boundary
+_JOBSTACK_TAGS = {
+    "Specialista Data", "Analytik", "Procesní analytik", "Data developer",
+    "Freelancer", "HPP", "Hybrid", "Remote", "Junior", "Medior", "Senior",
+    "Expert", "ML/AI", "ETL", "DevOps", "Elastic", "Architekt",
+}
+
+def _parse_jobstack_link(link) -> dict | None:
+    """
+    Parse a single job link from jobstack.it listing page.
+    Link text format (space-separated):
+      <title>  <role tag(s)>  <contract>  <work mode>  <seniority>  <company>  <location>  <salary>  [<company repeat>]
+    """
+    href = link.get("href", "")
+    if not href:
+        return None
+
+    BASE_URL = "https://www.jobstack.it"
+    full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
+
+    # Split text into non-empty parts
+    raw = link.get_text(separator="\n", strip=True)
+    parts = [p.strip() for p in raw.split("\n") if p.strip()]
+
+    if not parts:
+        return None
+
+    # Title = everything before the first known role/contract tag
+    title_parts = []
+    rest_start = 0
+    for i, part in enumerate(parts):
+        if any(tag in part for tag in _JOBSTACK_TAGS):
+            rest_start = i
+            break
+        title_parts.append(part)
+        rest_start = i + 1
+
+    title = " ".join(title_parts).strip()
+    if not title or len(title) < 3:
+        title = parts[0]  # fallback to first part
+
+    rest = parts[rest_start:]
+
+    # Salary — contains "Kč", "Navrhni", "Nadstandardní"
+    salary = ""
+    salary_keywords = ["Kč", "Navrhni", "Nadstandardní", "mzdu"]
+    for part in rest:
+        if any(kw in part for kw in salary_keywords):
+            salary = part
+            break
+
+    # Location — contains city names or work mode
+    location = "Praha"
+    location_keywords = ["Praha", "Brno", "Ostrava", "Plzeň", "Liberec",
+                         "Olomouc", "Zlín", "Remote", "remote", "Bratislava",
+                         "Wroclaw", "Poland", "Slovakia", "EU", "Homeoffice"]
+    for part in rest:
+        if any(kw in part for kw in location_keywords):
+            location = part
+            break
+
+    # Company — typically right before the location or salary
+    # Find parts that are NOT tags, NOT salary, NOT location
+    skip = set(_JOBSTACK_TAGS) | {"HPP", "Hybrid", "Remote", "Junior",
+                                   "Medior", "Senior", "Expert", "Freelancer"}
+    company_candidates = [
+        p for p in rest
+        if not any(tag in p for tag in skip)
+        and not any(kw in p for kw in salary_keywords)
+        and len(p) > 2
+    ]
+    company = company_candidates[0] if company_candidates else ""
+
+    return {
+        "title":    title,
+        "company":  company,
+        "location": location,
+        "salary":   salary,
+        "url":      full_url,
+    }
+
+
 def fetch_jobstack() -> list[dict]:
     """
-    Scrapes jobstack.it Data (BI, DWH, BigData) category.
-    Fetches multiple pages until no more results.
+    Scrapes jobstack.it Data (BI, DWH, BigData) + Analytik categories.
     """
-    BASE_URL = "https://www.jobstack.it"
-    CATEGORY_URL = f"{BASE_URL}/it-jobs/specialista-data-bi-dwh-bigdata"
-    results = []
-    page = 1
-    max_pages = 5  # at most 5 pages (~100 jobs)
+    BASE_URL    = "https://www.jobstack.it"
+    CATEGORIES  = [
+        "/it-jobs/specialista-data-bi-dwh-bigdata",
+        "/it-jobs/analytik",
+    ]
+    results  = []
+    seen_ids = set()
 
-    while page <= max_pages:
-        try:
-            url = CATEGORY_URL if page == 1 else f"{CATEGORY_URL}?page={page}"
-            resp = requests.get(
-                url,
-                headers={**_HEADERS, "Accept-Language": "cs,en;q=0.9"},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
+    for category in CATEGORIES:
+        page     = 1
+        max_pages = 5
 
-            # Job listings are <li> elements containing links to /it-job/...
-            job_links = soup.select("ul li a[href*='/it-job/']")
+        while page <= max_pages:
+            try:
+                url = f"{BASE_URL}{category}" if page == 1 else f"{BASE_URL}{category}?page={page}"
+                resp = requests.get(
+                    url,
+                    headers={**_HEADERS, "Accept-Language": "cs,en;q=0.9"},
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, "html.parser")
 
-            if not job_links:
+                job_links = soup.select("ul li a[href*='/it-job/']")
+                if not job_links:
+                    break
+
+                new_on_page = 0
+                for link in job_links:
+                    parsed = _parse_jobstack_link(link)
+                    if not parsed:
+                        continue
+
+                    job_id = make_id(parsed["url"])
+                    if job_id in seen_ids:
+                        continue
+                    seen_ids.add(job_id)
+
+                    if not is_relevant(parsed["title"]):
+                        continue
+
+                    results.append({
+                        "job_id":      job_id,
+                        "title":       parsed["title"],
+                        "company":     parsed["company"],
+                        "location":    parsed["location"],
+                        "description": "",
+                        "url":         parsed["url"],
+                        "source":      "jobstack",
+                        "salary":      parsed["salary"],
+                        "scraped_at":  _now(),
+                    })
+                    new_on_page += 1
+
+                print(f"[jobstack] {category} page {page}: {new_on_page} jobs")
+
+                next_link = soup.select_one(f"a[href*='page={page + 1}']")
+                if not next_link:
+                    break
+
+                page += 1
+                time.sleep(2.0)
+
+            except Exception as e:
+                print(f"[jobstack] error on {category} page {page}: {e}")
                 break
-
-            new_on_page = 0
-            for link in job_links:
-                href = link.get("href", "")
-                if not href:
-                    continue
-
-                full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
-
-                # Extract title from link text, stripping extra whitespace
-                raw_text = link.get_text(separator=" ", strip=True)
-
-                # Title is usually the first line / sentence before role tags
-                # Clean up common suffixes like "Freelancer HPP Hybrid Senior..."
-                title = raw_text.split("  ")[0].strip()
-                if not title or len(title) < 4:
-                    continue
-
-                # Extract salary — look for "až X Kč" or "Navrhni si mzdu" pattern
-                salary = ""
-                salary_patterns = ["až ", "Navrhni si mzdu", "od "]
-                for part in raw_text.split("  "):
-                    part = part.strip()
-                    if any(p in part for p in salary_patterns):
-                        salary = part
-                        break
-
-                # Extract location — text after company name, before salary
-                # Try to find it in the link text parts
-                location = "Praha"
-                parts = [p.strip() for p in raw_text.split("  ") if p.strip()]
-                for part in parts:
-                    if any(city in part for city in ["Praha", "Brno", "Ostrava", "Plzeň", "remote", "Remote", "hybrid", "Hybrid"]):
-                        location = part
-                        break
-
-                results.append({
-                    "job_id":      make_id(full_url),
-                    "title":       title,
-                    "company":     "",  # not easily extractable from list view
-                    "location":    location,
-                    "description": "",
-                    "url":         full_url,
-                    "source":      "jobstack",
-                    "salary":      salary,
-                    "scraped_at":  _now(),
-                })
-                new_on_page += 1
-
-            print(f"[jobstack] page {page}: {new_on_page} jobs")
-
-            # Check if there's a next page
-            next_link = soup.select_one(f"a[href*='page={page + 1}']")
-            if not next_link:
-                break
-
-            page += 1
-            time.sleep(2.0)
-
-        except Exception as e:
-            print(f"[jobstack] error on page {page}: {e}")
-            break
 
     return results
 
