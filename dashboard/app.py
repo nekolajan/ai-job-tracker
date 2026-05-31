@@ -71,7 +71,7 @@ html, body, [class*="css"] {
     max-width: 1400px !important;
 }
 
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu, footer { visibility: hidden; }
 .stDeployButton { display: none; }
 
 /* ── Page header ── */
