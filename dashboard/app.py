@@ -145,8 +145,8 @@ html, body, [class*="css"] {
     background: linear-gradient(90deg, var(--accent), #8B5CF6);
     border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
-.metric-value { font-size: 1.8rem; font-weight: 800; color: #111827; line-height: 1; margin-bottom: 0.25rem; }
-.metric-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: #9CA3AF; }
+.metric-value { font-size: 1.8rem; font-weight: 800; color: #111827 !important; line-height: 1; margin-bottom: 0.25rem; }
+.metric-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: #9CA3AF !important; }
 .metric-delta { font-size: 0.75rem; font-weight: 500; margin-top: 0.2rem; color: #6B7280; }
 
 /* ── Tabs ── */
@@ -235,8 +235,8 @@ html, body, [class*="css"] {
 .tag-remote { background: #F0F9FF; color: #0369A1; border: 1px solid #BAE6FD; }
 
 /* ── Job title & meta ── */
-.job-title   { font-size: 1rem; font-weight: 700; color: #111827; line-height: 1.3; }
-.job-company { font-size: 0.88rem; font-weight: 500; color: #6366F1; }
+.job-title   { font-size: 1rem; font-weight: 700; color: #111827 !important; line-height: 1.3; }
+.job-company { font-size: 0.88rem; font-weight: 500; color: #6366F1 !important; }
 .job-meta {
     font-size: 0.78rem; color: #9CA3AF;
     display: flex; flex-wrap: wrap; gap: 0.6rem;
@@ -264,7 +264,7 @@ html, body, [class*="css"] {
     margin-bottom: 0.5rem; transition: var(--transition);
 }
 .kanban-card:hover { box-shadow: var(--shadow-sm); border-color: #C7D2FE; }
-.kanban-card-title  { font-weight: 600; color: #111827; font-size: 0.82rem; line-height: 1.3; margin-bottom: 2px; }
+.kanban-card-title  { font-weight: 600; color: #111827 !important; font-size: 0.82rem; line-height: 1.3; margin-bottom: 2px; }
 .kanban-card-company { color: #6B7280; font-size: 0.75rem; }
 .kanban-card-score  { float: right; font-weight: 700; font-size: 0.78rem; padding: 1px 6px; border-radius: 4px; }
 
