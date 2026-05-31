@@ -416,12 +416,27 @@ def load_jobs() -> pd.DataFrame:
     """).to_dataframe()
 
 
+def get_bq_client():
+    from google.cloud import bigquery
+    from google.oauth2 import service_account
+    project    = os.environ["GCP_PROJECT_ID"]
+    creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    if creds_json:
+        import json
+        info  = json.loads(creds_json)
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        return bigquery.Client(project=project, credentials=creds)
+    return bigquery.Client(project=project)
+
+
 def save_status(job_id: str, new_status: str) -> None:
     st.session_state.status_overrides[job_id] = new_status
     if not DEMO_MODE:
         from google.cloud import bigquery
         project = os.environ["GCP_PROJECT_ID"]
-        client  = bigquery.Client(project=project)
+        client  = get_bq_client()
         table   = f"{project}.{os.environ['BQ_DATASET']}.{os.environ['BQ_TABLE']}"
         client.query(
             f"UPDATE `{table}` SET status = '{new_status}' WHERE job_id = '{job_id}'"
