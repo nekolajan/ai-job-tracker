@@ -405,15 +405,46 @@ def load_jobs() -> pd.DataFrame:
     else:
         client = bigquery.Client(project=project)
 
-    table = f"{project}.{os.environ['BQ_DATASET']}.{os.environ['BQ_TABLE']}"
-    return client.query(f"""
-        SELECT job_id, title, company, location, url, source, salary,
-               score, match_summary, skills_match, gaps,
-               seniority_match, remote_match, status,
-               DATE(scraped_at) AS date_scraped
-        FROM `{table}`
-        ORDER BY score DESC, scraped_at DESC
-    """).to_dataframe()
+    table    = f"{project}.{os.environ['BQ_DATASET']}.{os.environ['BQ_TABLE']}"
+    ov_table = f"{project}.{os.environ['BQ_DATASET']}.status_overrides"
+
+    # Check if status_overrides table exists
+    try:
+        client.get_table(ov_table)
+        overrides_exist = True
+    except Exception:
+        overrides_exist = False
+
+    if overrides_exist:
+        # Merge latest status override per job_id at read time
+        query = f"""
+            SELECT
+                j.job_id, j.title, j.company, j.location, j.url, j.source, j.salary,
+                j.score, j.match_summary, j.skills_match, j.gaps,
+                j.seniority_match, j.remote_match,
+                COALESCE(o.status, j.status) AS status,
+                DATE(j.scraped_at) AS date_scraped
+            FROM `{table}` j
+            LEFT JOIN (
+                SELECT job_id, status
+                FROM (
+                    SELECT job_id, status,
+                           ROW_NUMBER() OVER (PARTITION BY job_id ORDER BY updated_at DESC) AS rn
+                    FROM `{ov_table}`
+                ) WHERE rn = 1
+            ) o ON j.job_id = o.job_id
+            ORDER BY j.score DESC, j.scraped_at DESC
+        """
+    else:
+        query = f"""
+            SELECT job_id, title, company, location, url, source, salary,
+                   score, match_summary, skills_match, gaps,
+                   seniority_match, remote_match, status,
+                   DATE(scraped_at) AS date_scraped
+            FROM `{table}`
+            ORDER BY score DESC, scraped_at DESC
+        """
+    return client.query(query).to_dataframe()
 
 
 def get_bq_client():
@@ -432,15 +463,49 @@ def get_bq_client():
 
 
 def save_status(job_id: str, new_status: str) -> None:
+    """
+    Save status change to session state and to a status_overrides table in BigQuery.
+    Uses load jobs (free-tier compatible) instead of DML UPDATE.
+    The load_jobs() query merges overrides at read time via a LEFT JOIN.
+    """
     st.session_state.status_overrides[job_id] = new_status
     if not DEMO_MODE:
+        import tempfile, json as _json
         from google.cloud import bigquery
-        project = os.environ["GCP_PROJECT_ID"]
-        client  = get_bq_client()
-        table   = f"{project}.{os.environ['BQ_DATASET']}.{os.environ['BQ_TABLE']}"
-        client.query(
-            f"UPDATE `{table}` SET status = '{new_status}' WHERE job_id = '{job_id}'"
-        ).result()
+        project  = os.environ["GCP_PROJECT_ID"]
+        dataset  = os.environ["BQ_DATASET"]
+        client   = get_bq_client()
+        ov_table = f"{project}.{dataset}.status_overrides"
+
+        # Ensure status_overrides table exists
+        schema = [
+            bigquery.SchemaField("job_id",     "STRING",    mode="REQUIRED"),
+            bigquery.SchemaField("status",     "STRING",    mode="REQUIRED"),
+            bigquery.SchemaField("updated_at", "TIMESTAMP", mode="REQUIRED"),
+        ]
+        try:
+            client.get_table(ov_table)
+        except Exception:
+            client.create_table(bigquery.Table(ov_table, schema=schema))
+
+        # Append the override row via load job (free-tier compatible)
+        row = _json.dumps({
+            "job_id":     job_id,
+            "status":     new_status,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            f.write(row + "\n")
+            tmp_path = f.name
+
+        job_config = bigquery.LoadJobConfig(
+            schema=schema,
+            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        )
+        with open(tmp_path, "rb") as f:
+            client.load_table_from_file(f, ov_table, job_config=job_config).result()
+        os.unlink(tmp_path)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
