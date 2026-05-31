@@ -238,13 +238,30 @@ html, body, [class*="css"] {
 .job-title   { font-size: 1rem; font-weight: 700; color: #111827 !important; line-height: 1.3; }
 .job-company { font-size: 0.88rem; font-weight: 500; color: #6366F1 !important; }
 
-/* Force text colors inside Streamlit markdown containers */
-[data-testid="stMarkdownContainer"] .job-title { color: #111827 !important; }
-[data-testid="stMarkdownContainer"] .job-company { color: #6366F1 !important; }
-[data-testid="stMarkdownContainer"] .job-meta { color: #9CA3AF !important; }
-[data-testid="stMarkdownContainer"] .kanban-card-title { color: #111827 !important; }
-[data-testid="stMarkdownContainer"] .kanban-card-company { color: #6B7280 !important; }
-[data-testid="stMarkdownContainer"] .metric-value { color: #111827 !important; }
+/* Override Streamlit dark mode inheritance for custom HTML components */
+.job-card, .job-card * { color: inherit; }
+.job-title        { color: #111827 !important; }
+.job-company      { color: #6366F1 !important; }
+.job-meta         { color: #9CA3AF !important; }
+.job-meta span    { color: #9CA3AF !important; }
+.metric-card      { color-scheme: light; }
+.metric-value     { color: #111827 !important; }
+.metric-label     { color: #9CA3AF !important; }
+.kanban-col       { color-scheme: light; }
+.kanban-card-title   { color: #111827 !important; }
+.kanban-card-company { color: #6B7280 !important; }
+.score-high   { color: #059669 !important; }
+.score-medium { color: #D97706 !important; }
+.score-low    { color: #DC2626 !important; }
+.section-divider-label { color: #9CA3AF !important; }
+.empty-state-title { color: #6B7280 !important; }
+.empty-state-sub   { color: #9CA3AF !important; }
+
+/* Force light background on cards regardless of theme */
+.job-card     { background: white !important; color-scheme: light; }
+.metric-card  { background: white !important; }
+.kanban-card  { background: white !important; }
+.kanban-col   { background: #F9FAFB !important; }
 .job-meta {
     font-size: 0.78rem; color: #9CA3AF;
     display: flex; flex-wrap: wrap; gap: 0.6rem;
