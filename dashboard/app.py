@@ -42,7 +42,11 @@ STATUS_CONFIG = {
     "ignored":   {"emoji": "🙈", "color": "#9CA3AF", "bg": "#F9FAFB", "dark_bg": "#1F2937", "label": "Ignored"},
 }
 
-SCORE_THRESHOLDS = {"high": 75, "medium": 50}
+try:
+    from config import SCORE_THRESHOLD_GOOD, SCORE_THRESHOLD_OK
+except ImportError:
+    SCORE_THRESHOLD_GOOD, SCORE_THRESHOLD_OK = 70, 50
+SCORE_THRESHOLDS = {"high": SCORE_THRESHOLD_GOOD, "medium": SCORE_THRESHOLD_OK}
 
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
@@ -800,7 +804,7 @@ def render_cards(filtered: pd.DataFrame) -> None:
         current = st.session_state.status_overrides.get(job_id, job.get("status", "new"))
         salary  = job.get("salary", "") or ""
         s       = int(job["score"]) if not pd.isna(job.get("score")) else 0
-        accent  = "#059669" if s >= 75 else ("#D97706" if s >= 50 else "#DC2626")
+        accent  = "#059669" if s >= SCORE_THRESHOLDS["high"] else ("#D97706" if s >= SCORE_THRESHOLDS["medium"] else "#DC2626")
 
         with st.container():
             st.markdown(
@@ -909,8 +913,8 @@ def render_kanban(df: pd.DataFrame) -> None:
             else:
                 for _, job in jobs.head(8).iterrows():
                     s           = int(job["score"]) if not pd.isna(job.get("score")) else 0
-                    score_color = "#059669" if s >= 75 else ("#D97706" if s >= 50 else "#DC2626")
-                    score_bg    = "#F0FDF4" if s >= 75 else ("#FFFBEB" if s >= 50 else "#FFF5F5")
+                    score_color = "#059669" if s >= SCORE_THRESHOLDS["high"] else ("#D97706" if s >= SCORE_THRESHOLDS["medium"] else "#DC2626")
+                    score_bg    = "#F0FDF4" if s >= SCORE_THRESHOLDS["high"] else ("#FFFBEB" if s >= SCORE_THRESHOLDS["medium"] else "#FFF5F5")
                     title       = job["title"][:35] + ("…" if len(job["title"]) > 35 else "")
                     company     = job["company"][:28] + ("…" if len(job["company"]) > 28 else "")
                     st.markdown(

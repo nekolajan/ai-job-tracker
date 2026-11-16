@@ -35,17 +35,15 @@ try:
         SCORING_MODEL,
         SCORING_MAX_TOKENS,
         DESCRIPTION_MAX_CHARS,
-        RELEVANT_TITLE_KEYWORDS,
         DEFAULT_STATUS,
     )
+    from config import SCORING_ENABLED, MAX_LLM_CALLS_PER_RUN
 except ImportError:
+    SCORING_ENABLED        = False
+    MAX_LLM_CALLS_PER_RUN  = 30
     SCORING_MODEL          = "claude-haiku-4-5"
     SCORING_MAX_TOKENS     = 1024
     DESCRIPTION_MAX_CHARS  = 3000
-    RELEVANT_TITLE_KEYWORDS = [
-        "data", "analyst", "analytics", "bi", "business intelligence",
-        "insight", "reporting", "warehouse", "pipeline", "sql",
-    ]
     DEFAULT_STATUS = "new"
 
 # ── CV profile ────────────────────────────────────────────────────────────────
@@ -129,9 +127,10 @@ Score this job for the candidate."""
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def is_relevant_title(title: str) -> bool:
-    """Pre-filter: skip jobs that are clearly not data/analytics roles."""
-    t = title.lower()
-    return any(kw in t for kw in RELEVANT_TITLE_KEYWORDS)
+    """Pre-filter: skip jobs that are clearly not data/analytics roles.
+    Same rule the scraper uses (config.RELEVANT_TITLE_PATTERNS)."""
+    from scraper.utils import is_relevant
+    return is_relevant(title)
 
 
 def parse_score_response(text: str) -> dict:
@@ -173,7 +172,21 @@ def score_job(client: anthropic.Anthropic, cv: str, job: dict) -> dict:
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+def select_jobs_to_score(raw_jobs: list, scored_ids: set, limit: int) -> tuple[list, int, int]:
+    """Pick the jobs for this run: not scored yet, relevant title, newest first,
+    at most `limit`. Returns (jobs, skipped as irrelevant, left for the next run)."""
+    new = [j for j in raw_jobs if j["job_id"] not in scored_ids]
+    relevant = [j for j in new if is_relevant_title(j.get("title", ""))]
+    relevant.sort(key=lambda j: j.get("scraped_at", ""), reverse=True)
+    limit = max(limit, 0)
+    return relevant[:limit], len(new) - len(relevant), max(len(relevant) - limit, 0)
+
+
 def main():
+    if not SCORING_ENABLED:
+        print("[score] scoring is switched off (config.SCORING_ENABLED = False) — no API calls made")
+        return
+
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print("[score] ERROR: ANTHROPIC_API_KEY not set in environment", file=sys.stderr)
@@ -197,16 +210,12 @@ def main():
     print(f"[score] already scored: {len(scored_ids)}")
 
     # Find new jobs to score
-    to_score = [
-        j for j in raw_jobs
-        if j["job_id"] not in scored_ids and is_relevant_title(j.get("title", ""))
-    ]
-    skipped_irrelevant = len([
-        j for j in raw_jobs
-        if j["job_id"] not in scored_ids and not is_relevant_title(j.get("title", ""))
-    ])
+    to_score, skipped_irrelevant, deferred = select_jobs_to_score(
+        raw_jobs, scored_ids, MAX_LLM_CALLS_PER_RUN
+    )
 
-    print(f"[score] to score: {len(to_score)} new jobs ({skipped_irrelevant} skipped as irrelevant)")
+    print(f"[score] to score: {len(to_score)} new jobs ({skipped_irrelevant} skipped as irrelevant, "
+          f"{deferred} over the cap of {MAX_LLM_CALLS_PER_RUN} left for the next run)")
 
     if not to_score:
         print("[score] nothing to do — all jobs already scored")

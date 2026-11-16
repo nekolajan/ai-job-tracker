@@ -1,46 +1,45 @@
 """
 scraper/scrape.py
 
-Fetches job listings from Remotive, The Muse, jobs.cz, LinkedIn, and Jobstack.it.
-Saves deduplicated results to data/raw_jobs.json.
+Fetches job listings from:
+  - Remotive (API)
+  - The Muse (API)
+  - jobs.cz (scrape)
+  - LinkedIn (scrape)
+  - Jobstack.it (scrape)
+  - Himalayas (API)        ← new
+  - RemoteOK (API)         ← new
+  - StartupJobs.cz (scrape)
+  - Company career boards: Greenhouse / Lever / Ashby (API, see scraper/ats.py)
+
+Filters spam, skips reposts of postings already stored (same title + company),
+fetches missing descriptions for new jobs (scraper/details.py) and saves the
+result to data/raw_jobs.json.
 """
 
 import json
-import hashlib
 import time
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 from bs4 import BeautifulSoup
 
 from config import (
-    SEARCH_KEYWORDS, SOURCES, DATA_DIR, RAW_JOBS_FILENAME,
-    DESCRIPTION_MAX_CHARS, RELEVANT_TITLE_KEYWORDS,
+    SEARCH_KEYWORDS, SOURCES, DATA_DIR, RAW_JOBS_FILENAME, DESCRIPTION_STORE_MAX_CHARS,
+    LINKEDIN_SEARCHES, LINKEDIN_TIME_FILTER, DEDUP_WINDOW_DAYS,
 )
+from scraper.utils import (
+    HEADERS as _HEADERS, make_id, canonical_url, is_relevant, is_allowed,
+    fingerprint, now as _now,
+)
+from scraper.ats import fetch_ats
+from scraper.details import enrich_descriptions
 
 RAW_JOBS_PATH = Path(__file__).parent.parent / DATA_DIR / RAW_JOBS_FILENAME
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-
-def make_id(url: str) -> str:
-    return hashlib.md5(url.encode()).hexdigest()[:12]
-
-
-def is_relevant(title: str) -> bool:
-    t = title.lower()
-    return any(kw in t for kw in RELEVANT_TITLE_KEYWORDS)
-
 
 def load_existing(path: Path) -> dict:
     if path.exists():
@@ -57,8 +56,8 @@ def save_jobs(path: Path, jobs: dict) -> None:
     )
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _strip_html(html: str) -> str:
+    return BeautifulSoup(html or "", "html.parser").get_text()[:DESCRIPTION_STORE_MAX_CHARS]
 
 
 # ── source: Remotive ─────────────────────────────────────────────────────────
@@ -86,7 +85,7 @@ def fetch_remotive() -> list[dict]:
                     "title":       title,
                     "company":     job.get("company_name", ""),
                     "location":    job.get("candidate_required_location", "Worldwide"),
-                    "description": job.get("description", "")[:DESCRIPTION_MAX_CHARS],
+                    "description": job.get("description", "")[:DESCRIPTION_STORE_MAX_CHARS],
                     "url":         job.get("url", ""),
                     "source":      "remotive",
                     "salary":      job.get("salary", ""),
@@ -125,9 +124,7 @@ def fetch_the_muse() -> list[dict]:
                     "title":       job.get("name", ""),
                     "company":     job.get("company", {}).get("name", ""),
                     "location":    ", ".join(locations) if locations else "Remote",
-                    "description": BeautifulSoup(
-                        job.get("contents", ""), "html.parser"
-                    ).get_text()[:DESCRIPTION_MAX_CHARS],
+                    "description": _strip_html(job.get("contents", "")),
                     "url":         url,
                     "source":      "the_muse",
                     "salary":      "",
@@ -170,12 +167,11 @@ def fetch_jobs_cz() -> list[dict]:
                 if not is_relevant(title):
                     continue
 
-                url     = title_el.get("href", "")
+                url     = canonical_url(title_el.get("href", ""))
                 company = logo_el["alt"] if logo_el and logo_el.get("alt") else (
                     footer[0].get_text(strip=True) if footer else ""
                 )
                 location = footer[1].get_text(strip=True) if len(footer) > 1 else "Praha"
-
                 salary_el = card.select_one(".Tag--success")
                 salary = salary_el.get_text(strip=True) if salary_el else ""
 
@@ -196,27 +192,22 @@ def fetch_jobs_cz() -> list[dict]:
     return results
 
 
-# ── source: LinkedIn (public, no login) ──────────────────────────────────────
+# ── source: LinkedIn ─────────────────────────────────────────────────────────
 
 def fetch_linkedin() -> list[dict]:
     cfg = SOURCES["linkedin"]
     if not cfg.enabled:
         return []
 
-    searches = [
-        ("data analyst BI", "Worldwide", "2"),
-        ("data analyst BI", "Prague", ""),
-        ("business intelligence", "Worldwide", "2"),
-    ]
-
     results = []
-    for keywords, location, remote in searches:
+    for keywords, location, remote in LINKEDIN_SEARCHES:
         try:
             params = {
                 "keywords": keywords,
                 "location": location,
                 "f_E":      "4",
                 "sortBy":   "DD",
+                "f_TPR":    LINKEDIN_TIME_FILTER,
             }
             if remote:
                 params["f_WT"] = remote
@@ -263,7 +254,6 @@ def fetch_linkedin() -> list[dict]:
 
 # ── source: Jobstack.it ───────────────────────────────────────────────────────
 
-# Role/contract tags that appear in the link text — used to find title boundary
 _JOBSTACK_TAGS = {
     "Specialista Data", "Analytik", "Procesní analytik", "Data developer",
     "Freelancer", "HPP", "Hybrid", "Remote", "Junior", "Medior", "Senior",
@@ -271,11 +261,6 @@ _JOBSTACK_TAGS = {
 }
 
 def _parse_jobstack_link(link) -> dict | None:
-    """
-    Parse a single job link from jobstack.it listing page.
-    Link text format (space-separated):
-      <title>  <role tag(s)>  <contract>  <work mode>  <seniority>  <company>  <location>  <salary>  [<company repeat>]
-    """
     href = link.get("href", "")
     if not href:
         return None
@@ -283,16 +268,14 @@ def _parse_jobstack_link(link) -> dict | None:
     BASE_URL = "https://www.jobstack.it"
     full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
 
-    # Split text into non-empty parts
-    raw = link.get_text(separator="\n", strip=True)
+    raw   = link.get_text(separator="\n", strip=True)
     parts = [p.strip() for p in raw.split("\n") if p.strip()]
 
     if not parts:
         return None
 
-    # Title = everything before the first known role/contract tag
     title_parts = []
-    rest_start = 0
+    rest_start  = 0
     for i, part in enumerate(parts):
         if any(tag in part for tag in _JOBSTACK_TAGS):
             rest_start = i
@@ -300,57 +283,39 @@ def _parse_jobstack_link(link) -> dict | None:
         title_parts.append(part)
         rest_start = i + 1
 
-    title = " ".join(title_parts).strip()
-    if not title or len(title) < 3:
-        title = parts[0]  # fallback to first part
+    title = " ".join(title_parts).strip() or parts[0]
+    rest  = parts[rest_start:]
 
-    rest = parts[rest_start:]
-
-    # Salary — contains "Kč", "Navrhni", "Nadstandardní"
     salary = ""
-    salary_keywords = ["Kč", "Navrhni", "Nadstandardní", "mzdu"]
     for part in rest:
-        if any(kw in part for kw in salary_keywords):
+        if any(kw in part for kw in ["Kč", "Navrhni", "Nadstandardní", "mzdu"]):
             salary = part
             break
 
-    # Location — contains city names or work mode
     location = "Praha"
-    location_keywords = ["Praha", "Brno", "Ostrava", "Plzeň", "Liberec",
-                         "Olomouc", "Zlín", "Remote", "remote", "Bratislava",
-                         "Wroclaw", "Poland", "Slovakia", "EU", "Homeoffice"]
     for part in rest:
-        if any(kw in part for kw in location_keywords):
+        if any(city in part for city in ["Praha", "Brno", "Ostrava", "Plzeň", "Liberec",
+                                          "Olomouc", "Remote", "remote", "Homeoffice"]):
             location = part
             break
 
-    # Company — typically right before the location or salary
-    # Find parts that are NOT tags, NOT salary, NOT location
-    skip = set(_JOBSTACK_TAGS) | {"HPP", "Hybrid", "Remote", "Junior",
-                                   "Medior", "Senior", "Expert", "Freelancer"}
+    skip = set(_JOBSTACK_TAGS) | {"HPP", "Hybrid", "Remote", "Junior", "Medior",
+                                    "Senior", "Expert", "Freelancer"}
     company_candidates = [
         p for p in rest
         if not any(tag in p for tag in skip)
-        and not any(kw in p for kw in salary_keywords)
+        and not any(kw in p for kw in ["Kč", "Navrhni", "Nadstandardní", "mzdu"])
         and len(p) > 2
     ]
     company = company_candidates[0] if company_candidates else ""
 
-    return {
-        "title":    title,
-        "company":  company,
-        "location": location,
-        "salary":   salary,
-        "url":      full_url,
-    }
+    return {"title": title, "company": company, "location": location,
+            "salary": salary, "url": full_url}
 
 
 def fetch_jobstack() -> list[dict]:
-    """
-    Scrapes jobstack.it Data (BI, DWH, BigData) + Analytik categories.
-    """
-    BASE_URL    = "https://www.jobstack.it"
-    CATEGORIES  = [
+    BASE_URL   = "https://www.jobstack.it"
+    CATEGORIES = [
         "/it-jobs/specialista-data-bi-dwh-bigdata",
         "/it-jobs/analytik",
     ]
@@ -358,17 +323,13 @@ def fetch_jobstack() -> list[dict]:
     seen_ids = set()
 
     for category in CATEGORIES:
-        page     = 1
+        page      = 1
         max_pages = 5
 
         while page <= max_pages:
             try:
-                url = f"{BASE_URL}{category}" if page == 1 else f"{BASE_URL}{category}?page={page}"
-                resp = requests.get(
-                    url,
-                    headers={**_HEADERS, "Accept-Language": "cs,en;q=0.9"},
-                    timeout=15,
-                )
+                url  = f"{BASE_URL}{category}" if page == 1 else f"{BASE_URL}{category}?page={page}"
+                resp = requests.get(url, headers={**_HEADERS, "Accept-Language": "cs,en;q=0.9"}, timeout=15)
                 resp.raise_for_status()
                 soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -381,15 +342,10 @@ def fetch_jobstack() -> list[dict]:
                     parsed = _parse_jobstack_link(link)
                     if not parsed:
                         continue
-
                     job_id = make_id(parsed["url"])
-                    if job_id in seen_ids:
+                    if job_id in seen_ids or not is_relevant(parsed["title"]):
                         continue
                     seen_ids.add(job_id)
-
-                    if not is_relevant(parsed["title"]):
-                        continue
-
                     results.append({
                         "job_id":      job_id,
                         "title":       parsed["title"],
@@ -405,10 +361,8 @@ def fetch_jobstack() -> list[dict]:
 
                 print(f"[jobstack] {category} page {page}: {new_on_page} jobs")
 
-                next_link = soup.select_one(f"a[href*='page={page + 1}']")
-                if not next_link:
+                if not soup.select_one(f"a[href*='page={page + 1}']"):
                     break
-
                 page += 1
                 time.sleep(2.0)
 
@@ -419,29 +373,293 @@ def fetch_jobstack() -> list[dict]:
     return results
 
 
+# ── source: Himalayas (API) ───────────────────────────────────────────────────
+
+def fetch_himalayas() -> list[dict]:
+    """
+    Uses Himalayas public JSON API.
+    Searches for each keyword, remote-only, returns up to max_results_per_keyword.
+    """
+    cfg = SOURCES.get("himalayas")
+    if not cfg or not cfg.enabled:
+        return []
+
+    results  = []
+    seen_ids = set()
+
+    for kw in SEARCH_KEYWORDS:
+        try:
+            resp = requests.get(
+                "https://himalayas.app/jobs/api",
+                params={"q": kw, "remote": "true", "limit": cfg.max_results_per_keyword},
+                headers=_HEADERS,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            for job in data.get("jobs", []):
+                title = job.get("title", "")
+                if not is_relevant(title):
+                    continue
+
+                url    = job.get("applicationLink") or job.get("guid", "")
+                job_id = make_id(url)
+                if job_id in seen_ids:
+                    continue
+                seen_ids.add(job_id)
+
+                # Build salary string
+                salary = ""
+                min_s  = job.get("minSalary")
+                max_s  = job.get("maxSalary")
+                curr   = job.get("currency", "USD")
+                if min_s and max_s:
+                    salary = f"{curr} {min_s:,} – {max_s:,}"
+                elif min_s:
+                    salary = f"{curr} {min_s:,}+"
+
+                # Location from restrictions list
+                restrictions = job.get("locationRestrictions") or []
+                location = ", ".join(restrictions) if restrictions else "Worldwide (Remote)"
+
+                results.append({
+                    "job_id":      job_id,
+                    "title":       title,
+                    "company":     job.get("companyName", ""),
+                    "location":    location,
+                    "description": _strip_html(job.get("description", "")),
+                    "url":         url,
+                    "source":      "himalayas",
+                    "salary":      salary,
+                    "scraped_at":  _now(),
+                })
+
+            time.sleep(cfg.request_delay_seconds)
+
+        except Exception as e:
+            print(f"[himalayas] error for '{kw}': {e}")
+
+    return results
+
+
+# ── source: RemoteOK (API) ────────────────────────────────────────────────────
+
+def fetch_remoteok() -> list[dict]:
+    """
+    Uses RemoteOK public JSON API.
+    Note: RemoteOK requires a User-Agent that isn't a bot; adding a small delay.
+    """
+    cfg = SOURCES.get("remoteok")
+    if not cfg or not cfg.enabled:
+        return []
+
+    results  = []
+    seen_ids = set()
+    tags     = ["data-analyst", "bi", "data-engineer", "business-intelligence", "analytics"]
+
+    for tag in tags:
+        try:
+            resp = requests.get(
+                f"https://remoteok.com/api?tag={tag}",
+                headers={
+                    **_HEADERS,
+                    "Accept": "application/json",
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            # First item is metadata, skip it
+            jobs = [j for j in data if isinstance(j, dict) and "position" in j]
+
+            for job in jobs[:cfg.max_results_per_keyword]:
+                title = job.get("position", "")
+                if not is_relevant(title):
+                    continue
+
+                url    = job.get("url", "")
+                if not url:
+                    continue
+                job_id = make_id(url)
+                if job_id in seen_ids:
+                    continue
+                seen_ids.add(job_id)
+
+                salary = ""
+                if job.get("salary_min") and job.get("salary_max"):
+                    salary = f"USD {job['salary_min']:,} – {job['salary_max']:,}"
+
+                results.append({
+                    "job_id":      job_id,
+                    "title":       title,
+                    "company":     job.get("company", ""),
+                    "location":    "Worldwide (Remote)",
+                    "description": BeautifulSoup(job.get("description", ""), "html.parser").get_text()[:DESCRIPTION_STORE_MAX_CHARS],
+                    "url":         url,
+                    "source":      "remoteok",
+                    "salary":      salary,
+                    "scraped_at":  _now(),
+                })
+
+            time.sleep(cfg.request_delay_seconds)
+
+        except Exception as e:
+            print(f"[remoteok] error for tag '{tag}': {e}")
+
+    return results
+
+
+# ── source: StartupJobs.cz (scrape) ──────────────────────────────────────────
+
+def fetch_startupjobs() -> list[dict]:
+    """
+    Scrapes startupjobs.cz for Czech/Slovak tech positions.
+    Searches data/analytics related positions.
+    """
+    cfg = SOURCES.get("startupjobs")
+    if not cfg or not cfg.enabled:
+        return []
+
+    BASE_URL = "https://www.startupjobs.cz"
+    results  = []
+    seen_ids = set()
+
+    search_terms = ["data analyst", "business intelligence", "data engineer", "analytik"]
+
+    for term in search_terms:
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/nabidky",
+                params={"q": term},
+                headers={**_HEADERS, "Accept-Language": "cs,en;q=0.9"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Job detail links are /nabidka/<id>/<slug> (singular); the listing is /nabidky
+            cards = [
+                c for c in soup.select("article, div.offer-card, [data-id]")
+                if c.select_one("a[href*='/nabidka/']")
+            ]
+            if not cards:
+                cards = soup.select("a[href*='/nabidka/']")
+            if not cards:
+                print(f"[startupjobs] no job links for '{term}' – page is likely rendered "
+                      f"by JavaScript; consider disabling this source")
+
+            for card in cards[:cfg.max_results_per_keyword]:
+                # Handle both article cards and direct links
+                if card.name == "a":
+                    link_el = card
+                    title   = card.get_text(strip=True)
+                    url     = card.get("href", "")
+                else:
+                    link_el = card.select_one("a[href*='/nabidka/']")
+                    if not link_el:
+                        continue
+                    title = (
+                        card.select_one("h2, h3, .title, .offer-title, [class*='title']") or link_el
+                    ).get_text(strip=True)
+                    url = link_el.get("href", "")
+
+                if not url or not title or not is_relevant(title):
+                    continue
+
+                full_url = canonical_url(url if url.startswith("http") else f"{BASE_URL}{url}")
+                job_id   = make_id(full_url)
+                if job_id in seen_ids:
+                    continue
+                seen_ids.add(job_id)
+
+                company_el  = card.select_one(".company, .company-name, [class*='company']") if card.name != "a" else None
+                location_el = card.select_one(".location, [class*='location']") if card.name != "a" else None
+                salary_el   = card.select_one(".salary, [class*='salary']") if card.name != "a" else None
+
+                results.append({
+                    "job_id":      job_id,
+                    "title":       title,
+                    "company":     company_el.get_text(strip=True) if company_el else "",
+                    "location":    location_el.get_text(strip=True) if location_el else "Czech Republic",
+                    "description": "",
+                    "url":         full_url,
+                    "source":      "startupjobs",
+                    "salary":      salary_el.get_text(strip=True) if salary_el else "",
+                    "scraped_at":  _now(),
+                })
+
+            time.sleep(cfg.request_delay_seconds)
+
+        except Exception as e:
+            print(f"[startupjobs] error for '{term}': {e}")
+
+    return results
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
+
+def recent_fingerprints(existing: dict, days: int = DEDUP_WINDOW_DAYS) -> set:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return {fingerprint(j) for j in existing.values() if j.get("scraped_at", "") >= cutoff}
+
+
+def merge_new(existing: dict, jobs: list[dict], seen_fps: set) -> tuple[list[dict], dict]:
+    """Add jobs that pass filters and are neither the same URL nor the same
+    title+company as a recently stored posting. Returns (added, skip counts)."""
+    added, skipped = [], {"duplicate": 0, "repost": 0, "filtered": 0}
+    for job in jobs:
+        if not is_allowed(job):
+            skipped["filtered"] += 1
+            continue
+        if job["job_id"] in existing:
+            skipped["duplicate"] += 1
+            continue
+        fp = fingerprint(job)
+        if fp in seen_fps:
+            skipped["repost"] += 1
+            continue
+        existing[job["job_id"]] = job
+        seen_fps.add(fp)
+        added.append(job)
+    return added, skipped
+
 
 def scrape_all() -> None:
     existing = load_existing(RAW_JOBS_PATH)
-    before = len(existing)
+    before   = len(existing)
+    seen_fps = recent_fingerprints(existing)
 
+    # ATS first: the same job found later on LinkedIn/jobs.cz is then skipped as a
+    # repost, and the ATS version already carries the full description.
     sources = [
-        ("remotive",  fetch_remotive),
-        ("the_muse",  fetch_the_muse),
-        ("jobs_cz",   fetch_jobs_cz),
-        ("linkedin",  fetch_linkedin),
-        ("jobstack",  fetch_jobstack),
+        ("ats",         fetch_ats),
+        ("remotive",    fetch_remotive),
+        ("the_muse",    fetch_the_muse),
+        ("jobs_cz",     fetch_jobs_cz),
+        ("linkedin",    fetch_linkedin),
+        ("jobstack",    fetch_jobstack),
+        ("himalayas",   fetch_himalayas),
+        ("remoteok",    fetch_remoteok),
+        ("startupjobs", fetch_startupjobs),
     ]
 
+    new_jobs = []
     for name, fetch_fn in sources:
         print(f"[scraper] fetching {name}...")
-        jobs = fetch_fn()
-        new = 0
-        for job in jobs:
-            if job["job_id"] not in existing:
-                existing[job["job_id"]] = job
-                new += 1
-        print(f"[scraper] {name}: {new} new jobs (skipped {len(jobs) - new} duplicates)")
+        try:
+            jobs = fetch_fn()
+            added, skipped = merge_new(existing, jobs, seen_fps)
+            new_jobs.extend(added)
+            print(f"[scraper] {name}: {len(added)} new | skipped {skipped}")
+        except Exception as e:
+            print(f"[scraper] {name}: FAILED — {e}")
+
+    try:
+        enrich_descriptions(new_jobs)
+    except Exception as e:
+        print(f"[details] FAILED — {e}")
 
     save_jobs(RAW_JOBS_PATH, existing)
     print(f"[scraper] done. total: {len(existing)} jobs (+{len(existing) - before} new)")
