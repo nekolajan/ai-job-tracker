@@ -371,31 +371,23 @@ def _arg(flag: str, default=None):
     return sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv else default
 
 
-def main() -> None:
+def run_extraction(limit: int = MAX_EXTRACTIONS_PER_RUN, job_ids: list[str] | None = None,
+                   show: bool = False) -> dict:
+    """Extract facts for up to `limit` jobs (or exactly `job_ids`). Returns counts;
+    `problem` is set when nothing could run (switched off, Ollama not ready)."""
+    if not EXTRACTION_ENABLED:
+        return {"problem": "extraction is switched off (config.EXTRACTION_ENABLED = False)"}
+    problem = ollama_ready()
+    if problem:
+        return {"problem": problem}
+
     jobs = json.loads(RAW_JOBS_PATH.read_text(encoding="utf-8")) if RAW_JOBS_PATH.exists() else []
     extracted = load_extracted()
     by_id = {j["job_id"]: j for j in jobs}
-
-    if "--show" in sys.argv and "--limit" not in sys.argv and "--job-id" not in sys.argv:
-        for job_id, f in list(extracted.items())[-int(_arg("--last", 20)):]:
-            if job_id in by_id:
-                _print_facts(by_id[job_id], f)
-        print(f"\n[extract] {len(extracted)} jobs extracted in total")
-        return
-
-    if not EXTRACTION_ENABLED:
-        print("[extract] extraction is switched off (config.EXTRACTION_ENABLED = False)")
-        return
-    problem = ollama_ready()
-    if problem:
-        print(f"[extract] {problem}")
-        sys.exit(1)
-
-    if _arg("--job-id"):
-        todo = [by_id[_arg("--job-id")]] if _arg("--job-id") in by_id else []
-        skipped = {}
+    if job_ids:
+        todo, skipped = [by_id[i] for i in job_ids if i in by_id], {}
     else:
-        todo, skipped = select_jobs(jobs, extracted, int(_arg("--limit", MAX_EXTRACTIONS_PER_RUN)))
+        todo, skipped = select_jobs(jobs, extracted, limit)
     print(f"[extract] {len(todo)} jobs to extract with {OLLAMA_MODEL} | skipped {skipped}")
 
     done = failed = 0
@@ -408,12 +400,32 @@ def main() -> None:
             save_extracted(extracted)          # keep progress if the run is interrupted
             done += 1
             print(f"{facts['seconds']}s")
-            if "--show" in sys.argv:
+            if show:
                 _print_facts(job, facts)
         except Exception as e:
             failed += 1
             print(f"FAILED: {e}")
     print(f"[extract] done. extracted={done} failed={failed} total stored={len(extracted)}")
+    return {"extracted": done, "failed": failed, "waiting": skipped.get("over_limit", 0),
+            "total": len(extracted)}
+
+
+def main() -> None:
+    if "--show" in sys.argv and "--limit" not in sys.argv and "--job-id" not in sys.argv:
+        jobs = json.loads(RAW_JOBS_PATH.read_text(encoding="utf-8")) if RAW_JOBS_PATH.exists() else []
+        by_id = {j["job_id"]: j for j in jobs}
+        extracted = load_extracted()
+        for job_id, f in list(extracted.items())[-int(_arg("--last", 20)):]:
+            if job_id in by_id:
+                _print_facts(by_id[job_id], f)
+        print(f"\n[extract] {len(extracted)} jobs extracted in total")
+        return
+    result = run_extraction(int(_arg("--limit", MAX_EXTRACTIONS_PER_RUN)),
+                            [_arg("--job-id")] if _arg("--job-id") else None,
+                            show="--show" in sys.argv)
+    if result.get("problem"):
+        print(f"[extract] {result['problem']}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

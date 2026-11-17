@@ -15,6 +15,7 @@ Run: streamlit run dashboard/app.py
 
 import os
 import re
+import sys
 import json
 import random
 from datetime import datetime, timezone
@@ -27,8 +28,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEMO_MODE     = not os.environ.get("GCP_PROJECT_ID")
-RAW_JOBS_PATH = Path(__file__).parent.parent / "data" / "raw_jobs.json"
+ROOT_DIR = Path(__file__).parent.parent
+if str(ROOT_DIR) not in sys.path:          # `streamlit run dashboard/app.py` only adds dashboard/
+    sys.path.insert(0, str(ROOT_DIR))
+
+from storage import local_db               # noqa: E402
+
+# Where the data comes from: the local database written by `python -m pipeline`
+# (data/jobs.db), else BigQuery (old setup, GCP_PROJECT_ID in .env), else demo data.
+LOCAL_MODE    = local_db.DB_PATH.exists()
+DEMO_MODE     = not LOCAL_MODE and not os.environ.get("GCP_PROJECT_ID")
+RAW_JOBS_PATH = ROOT_DIR / "data" / "raw_jobs.json"
 
 STATUSES = ["new", "saved", "applied", "replied", "interview", "rejected", "ignored"]
 
@@ -412,8 +422,18 @@ def _mock_scores(jobs: list[dict]) -> list[dict]:
     return out
 
 
+def data_version() -> str:
+    """Changes whenever the data source or the local database changes, so the
+    cached data is reloaded right after a pipeline run or a switch of source."""
+    if LOCAL_MODE:
+        return f"local:{local_db.DB_PATH.stat().st_mtime_ns}"
+    return "demo" if DEMO_MODE else "bigquery"
+
+
 @st.cache_data(ttl=300)
-def load_jobs() -> pd.DataFrame:
+def load_jobs(version: str = "") -> pd.DataFrame:
+    if LOCAL_MODE:
+        return local_db.load_for_dashboard()
     if DEMO_MODE:
         if not RAW_JOBS_PATH.exists():
             return pd.DataFrame()
@@ -498,6 +518,9 @@ def save_status(job_id: str, new_status: str) -> None:
     The load_jobs() query merges overrides at read time via a LEFT JOIN.
     """
     st.session_state.status_overrides[job_id] = new_status
+    if LOCAL_MODE:
+        local_db.add_status(job_id, new_status)
+        return
     if not DEMO_MODE:
         import tempfile, json as _json
         from google.cloud import bigquery
@@ -859,6 +882,24 @@ def render_cards(filtered: pd.DataFrame) -> None:
                         unsafe_allow_html=True,
                     )
 
+                points = job.get("points")
+                if isinstance(points, str):
+                    try: points = json.loads(points)
+                    except: points = {}
+                if points:
+                    labels = {"role": "Role", "seniority": "Seniority", "stack": "Stack",
+                              "nice_to_have": "Nice to have", "ai": "AI focus", "work_type": "Work type",
+                              "place": "Place", "contract": "Contract",
+                              "german_required": "German required", "people_management": "People mgmt"}
+                    st.caption("Points: " + " · ".join(
+                        f"{labels.get(k, k)} {v:+g}" for k, v in points.items() if v))
+                facts = job.get("facts")
+                if isinstance(facts, str):
+                    try: facts = json.loads(facts)
+                    except: facts = {}
+                if facts and facts.get("evidence"):
+                    st.caption(f"From the posting: “{facts['evidence']}”")
+
                 sc_col, gap_col = st.columns(2)
                 with sc_col:
                     skills = job.get("skills_match") or []
@@ -947,6 +988,9 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
+    st.caption("Data: " + ("local database (data/jobs.db)" if LOCAL_MODE
+                           else "demo data" if DEMO_MODE else "BigQuery"))
+
     if DEMO_MODE:
         st.markdown("""
         <div class="demo-banner">
@@ -956,7 +1000,7 @@ def main():
         """, unsafe_allow_html=True)
 
     try:
-        df = load_jobs()
+        df = load_jobs(data_version())
     except Exception as e:
         st.error(f"Could not load jobs: {e}")
         st.stop()

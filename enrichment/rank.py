@@ -192,11 +192,18 @@ def _arg(flag: str, default=None):
     return sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv else default
 
 
-def main() -> None:
-    jobs = json.loads(RAW_JOBS_PATH.read_text(encoding="utf-8"))
+def run_ranking() -> list[dict]:
+    """Score every extracted job and save data/ranked_jobs.json. Returns the rows, best first."""
+    jobs = json.loads(RAW_JOBS_PATH.read_text(encoding="utf-8")) if RAW_JOBS_PATH.exists() else []
     extracted = json.loads(EXTRACTED_PATH.read_text(encoding="utf-8")) if EXTRACTED_PATH.exists() else {}
     rows = rank_all(jobs, extracted)
     RANKED_PATH.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+    return rows
+
+
+def main() -> None:
+    jobs = json.loads(RAW_JOBS_PATH.read_text(encoding="utf-8"))
+    rows = run_ranking()
 
     if _arg("--job-id"):
         row = next((r for r in rows if r["job_id"] == _arg("--job-id")), None)

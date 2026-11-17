@@ -1,8 +1,10 @@
 name: Daily Job Scraper
 
 on:
-  schedule:
-    - cron: '0 8 * * 1-5'  # weekdays at 8:00 AM UTC
+  # Daily runs moved to the Mac (deploy/install_schedule.sh): the free pipeline
+  # needs the local Ollama model. This workflow can still be started by hand.
+  # schedule:
+  #   - cron: '0 8 * * 1-5'  # weekdays at 8:00 AM UTC
   workflow_dispatch:         # allow manual trigger from GitHub UI
 
 jobs:

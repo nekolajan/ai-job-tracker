@@ -27,14 +27,14 @@ from bs4 import BeautifulSoup
 
 from config import (
     SEARCH_KEYWORDS, SOURCES, DATA_DIR, RAW_JOBS_FILENAME, DESCRIPTION_STORE_MAX_CHARS,
-    LINKEDIN_SEARCHES, LINKEDIN_TIME_FILTER, DEDUP_WINDOW_DAYS,
+    LINKEDIN_SEARCHES, LINKEDIN_TIME_FILTER, DEDUP_WINDOW_DAYS, DETAIL_BACKFILL_DAYS,
 )
 from scraper.utils import (
     HEADERS as _HEADERS, make_id, canonical_url, is_relevant, is_allowed,
     fingerprint, now as _now,
 )
 from scraper.ats import fetch_ats
-from scraper.details import enrich_descriptions
+from scraper.details import enrich_descriptions, recent_jobs
 
 RAW_JOBS_PATH = Path(__file__).parent.parent / DATA_DIR / RAW_JOBS_FILENAME
 
@@ -656,8 +656,10 @@ def scrape_all() -> None:
         except Exception as e:
             print(f"[scraper] {name}: FAILED — {e}")
 
+    # Descriptions for today's new jobs and for recent ones that are still missing
+    # one (e.g. LinkedIn answered 429 yesterday) – newest first, capped per run.
     try:
-        enrich_descriptions(new_jobs)
+        enrich_descriptions(recent_jobs(list(existing.values()), DETAIL_BACKFILL_DAYS))
     except Exception as e:
         print(f"[details] FAILED — {e}")
 
