@@ -639,6 +639,12 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown('<div class="sidebar-section-title">🎛️ Options</div>', unsafe_allow_html=True)
         remote_only = st.toggle("Remote only", value=False)
+        unscored_count = int(df["score"].isna().sum())
+        show_unscored = st.toggle(
+            f"Also jobs without score ({unscored_count})", value=False,
+            help="Postings whose description could not be read (e.g. company career sites "
+                 "on jobs.cz). They have no score, so the score filter would hide them.",
+        )
         salary_only = st.toggle("Has salary listed", value=False)
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -691,7 +697,7 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
         )
         f = f[mask]
 
-    f = f[f["score"] >= min_score]
+    f = f[(f["score"] >= min_score) | (show_unscored & f["score"].isna())]
     if source != "All":         f = f[f["source"] == source]
     if status_filter:           f = f[f["status"].isin(status_filter)]
     if remote_only:             f = f[f["remote_match"] == True]

@@ -110,14 +110,30 @@ LINKEDIN_TIME_FILTER = "r604800"
 # Entries marked "verify" are guesses – run discover once and fix or remove them.
 
 ATS_COMPANIES = [
+    # verified with `discover` (Nov 2026)
     {"ats": "greenhouse", "slug": "sentinelonecz", "name": "SentinelOne"},
-    {"ats": "greenhouse", "slug": "gooddata",      "name": "GoodData",     "enabled": False},  # verify
-    {"ats": "ashby",      "slug": "modash",        "name": "Modash",       "enabled": False},  # verify
-    {"ats": "greenhouse", "slug": "productboard",  "name": "Productboard", "enabled": False},  # verify
-    {"ats": "greenhouse", "slug": "kiwicom",       "name": "Kiwi.com",     "enabled": False},  # verify
-    {"ats": "greenhouse", "slug": "mews",          "name": "Mews",         "enabled": False},  # verify
-    {"ats": "ashby",      "slug": "apify",         "name": "Apify",        "enabled": False},  # verify
-    {"ats": "lever",      "slug": "pipedrive",     "name": "Pipedrive",    "enabled": False},  # verify
+    {"ats": "lever",      "slug": "keboola",       "name": "Keboola"},
+    {"ats": "greenhouse", "slug": "make",          "name": "Make"},
+    {"ats": "greenhouse", "slug": "bloomreach",    "name": "Bloomreach"},
+    {"ats": "ashby",      "slug": "rohlik",        "name": "Rohlik Group"},
+    {"ats": "ashby",      "slug": "apify",         "name": "Apify"},
+    {"ats": "ashby",      "slug": "gooddata",      "name": "GoodData"},
+    {"ats": "greenhouse", "slug": "shipmonk",      "name": "ShipMonk"},
+    {"ats": "lever",      "slug": "ataccama",      "name": "Ataccama"},
+    {"ats": "greenhouse", "slug": "emplifi",       "name": "Emplifi"},
+    {"ats": "greenhouse", "slug": "groupon",       "name": "Groupon"},
+    {"ats": "lever",      "slug": "pipedrive",     "name": "Pipedrive"},   # 0 open jobs at check time
+    {"ats": "greenhouse", "slug": "purestorage",   "name": "Pure Storage"},
+    {"ats": "greenhouse", "slug": "jetbrains",     "name": "JetBrains"},
+    {"ats": "greenhouse", "slug": "gitlab",        "name": "GitLab"},
+    {"ats": "greenhouse", "slug": "canonical",     "name": "Canonical"},
+    {"ats": "greenhouse", "slug": "elastic",       "name": "Elastic"},
+    {"ats": "ashby",      "slug": "e2b",           "name": "E2B"},
+    {"ats": "ashby",      "slug": "qonto",         "name": "Qonto"},
+    {"ats": "ashby",      "slug": "duck-duck-go",  "name": "DuckDuckGo"},
+    # not on Greenhouse / Lever / Ashby under these names: productboard, kiwicom, mews,
+    # resistantai, modash, pricefx, rapid7, veeam, rossum, betterstack, livesport,
+    # kentico, fnz, twisto, smartlook – they come in through LinkedIn / jobs.cz instead
 ]
 
 # ATS boards list global jobs – keep only these locations (lower-case substrings)
