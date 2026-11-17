@@ -618,6 +618,26 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
         search_query = st.text_input("Search jobs", placeholder="Title, company, skill…", label_visibility="collapsed")
 
         st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-section-title">🕒 Found</div>', unsafe_allow_html=True)
+        found_all = pd.to_datetime(df["first_seen"] if "first_seen" in df else df["date_scraped"],
+                                   errors="coerce").dt.date
+        found_filter = st.selectbox(
+            "Found", ["Any time", "Last run", "Last 3 days", "Last 7 days", "Last 30 days", "Choose dates…"],
+            label_visibility="collapsed",
+            help="When the posting was first found. 'Last run' = jobs added by the most recent daily run. "
+                 "With a period chosen, jobs without a score are shown too.",
+        )
+        found_range = None
+        if found_filter == "Choose dates…" and found_all.notna().any():
+            first, last = found_all.min(), found_all.max()
+            picked = st.date_input("From – to", value=(max(first, last - pd.Timedelta(days=6)), last),
+                                   min_value=first, max_value=last, format="DD.MM.YYYY")
+            if isinstance(picked, (tuple, list)) and len(picked) == 2:
+                found_range = picked
+            elif isinstance(picked, (tuple, list)) and len(picked) == 1:
+                found_range = (picked[0], picked[0])
+
+        st.markdown("<br>", unsafe_allow_html=True)
         st.markdown('<div class="sidebar-section-title">⚡ Match Score</div>', unsafe_allow_html=True)
         min_score = st.slider("Minimum score", 0, 100, 50, step=5, label_visibility="collapsed")
 
@@ -697,7 +717,21 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
         )
         f = f[mask]
 
-    f = f[(f["score"] >= min_score) | (show_unscored & f["score"].isna())]
+    # A chosen period shows everything new in it, including jobs without a score yet
+    period_active = found_filter != "Any time"
+    f = f[(f["score"] >= min_score) | ((show_unscored or period_active) & f["score"].isna())]
+
+    if period_active:
+        found = found_all.loc[f.index]
+        if found_filter == "Last run":
+            f = f[found == found_all.max()]
+        elif found_filter == "Choose dates…":
+            if found_range:
+                f = f[(found >= found_range[0]) & (found <= found_range[1])]
+        else:
+            days = int(found_filter.split()[1])
+            since = (pd.Timestamp.now().normalize() - pd.Timedelta(days=days - 1)).date()
+            f = f[found >= since]
     if source != "All":         f = f[f["source"] == source]
     if status_filter:           f = f[f["status"].isin(status_filter)]
     if remote_only:             f = f[f["remote_match"] == True]
