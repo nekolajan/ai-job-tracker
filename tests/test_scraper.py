@@ -372,5 +372,51 @@ class TestExpired(unittest.TestCase):
         self.assertFalse(needs_description(job))
 
 
+class TestPostedDate(unittest.TestCase):
+    def test_to_date(self):
+        from scraper.utils import to_date
+        self.assertEqual(to_date("2026-11-03T10:15:00Z"), "2026-11-03")
+        self.assertEqual(to_date(1794000000), to_date(1794000000000))      # seconds == milliseconds
+        self.assertEqual(to_date("1794000000"), to_date(1794000000))
+        self.assertIsNone(to_date(""))
+        self.assertIsNone(to_date("yesterday"))
+
+    def test_ats_parsers_keep_publication_date(self):
+        gh = parse_greenhouse({"jobs": [{"title": "Data Engineer", "absolute_url": "https://g/1",
+                                         "location": {"name": "Prague"}, "content": "",
+                                         "first_published": "2026-10-01T08:00:00-04:00",
+                                         "updated_at": "2026-11-15T08:00:00-04:00"}]}, "X")[0]
+        self.assertEqual(gh["posted_at"], "2026-10-01")
+        lv = parse_lever([{"text": "BI Analyst", "hostedUrl": "https://l/1", "createdAt": 1793577600000,
+                           "categories": {"location": "Prague"}}], "X")[0]
+        self.assertEqual(lv["posted_at"], "2026-11-02")
+        ab = parse_ashby({"jobs": [{"title": "Analytics Engineer", "jobUrl": "https://a/1",
+                                    "publishedAt": "2026-09-20T12:00:00.000+00:00"}]}, "X")[0]
+        self.assertEqual(ab["posted_at"], "2026-09-20")
+
+    def test_json_ld_date_posted(self):
+        from scraper.details import posted_date
+        ld = json.dumps({"@type": "JobPosting", "datePosted": "2026-11-12", "description": LONG})
+        self.assertEqual(posted_date(f'<script type="application/ld+json">{ld}</script>'), "2026-11-12")
+        self.assertIsNone(posted_date("<html></html>"))
+
+    def test_resighted_job_learns_its_date(self):
+        existing = {"a1": {"job_id": "a1", "title": "Data Engineer", "company": "Make"}}
+        merge_new(existing, [{"job_id": "a1", "title": "Data Engineer", "company": "Make",
+                              "source": "greenhouse", "posted_at": "2026-10-30"}], set())
+        self.assertEqual(existing["a1"]["posted_at"], "2026-10-30")
+
+
+class TestCompanyAliases(unittest.TestCase):
+    def test_same_posting_under_other_company_names(self):
+        a = {"title": "Senior AI Knowledge Graph Engineer", "company": "Everpure"}
+        b = {"title": "Senior AI Knowledge Graph Engineer", "company": "Pure Storage"}
+        c = {"title": "BI Solution Architect", "company": "GoodData.AI"}
+        d = {"title": "BI Solution Architect", "company": "GoodData"}
+        self.assertEqual(fingerprint(a), fingerprint(b))
+        self.assertEqual(fingerprint(c), fingerprint(d))
+        self.assertNotEqual(fingerprint(a), fingerprint({**a, "company": "Elastic"}))
+
+
 if __name__ == "__main__":
     unittest.main()

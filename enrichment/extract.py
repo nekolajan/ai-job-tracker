@@ -32,6 +32,7 @@ from config import (
     EXTRACTION_ENABLED, LLM_PROVIDER, OLLAMA_URL, OLLAMA_MODEL, OLLAMA_CONTEXT_TOKENS,
     OLLAMA_TIMEOUT_SECONDS, MAX_EXTRACTIONS_PER_RUN, EXTRACT_DESCRIPTION_MAX_CHARS,
     EXTRACTION_PROMPT_VERSION, EXTRACTED_JOBS_FILENAME, DATA_DIR, RAW_JOBS_FILENAME,
+    EXTRACTION_TIME_BUDGET_MINUTES,
 )
 
 ROOT = Path(__file__).parent.parent
@@ -193,7 +194,7 @@ def _chat(messages: list[dict], use_schema: bool) -> requests.Response:
     }
     if use_schema:
         body["format"] = SCHEMA
-    return requests.post(f"{OLLAMA_URL}/api/chat", json=body, timeout=OLLAMA_TIMEOUT_SECONDS)
+    return requests.post(f"{OLLAMA_URL}/api/chat", json=body, timeout=(10, OLLAMA_TIMEOUT_SECONDS))
 
 
 def call_ollama(prompt: str) -> dict:
@@ -391,7 +392,13 @@ def run_extraction(limit: int = MAX_EXTRACTIONS_PER_RUN, job_ids: list[str] | No
     print(f"[extract] {len(todo)} jobs to extract with {OLLAMA_MODEL} | skipped {skipped}")
 
     done = failed = 0
+    started = time.time()
+    budget = EXTRACTION_TIME_BUDGET_MINUTES * 60
     for i, job in enumerate(todo, 1):
+        if time.time() - started > budget:
+            print(f"[extract] time budget of {EXTRACTION_TIME_BUDGET_MINUTES} min used up – "
+                  f"{len(todo) - i + 1} jobs wait for the next run")
+            break
         print(f"[extract] {i}/{len(todo)} {job.get('title', '')[:60]} @ {job.get('company', '')[:30]} ... ",
               end="", flush=True)
         try:

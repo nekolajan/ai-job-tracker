@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     salary          TEXT,
     scraped_at      TEXT,
     first_seen_at   TEXT,
+    posted_at       TEXT,             -- publication date from the job board, if known
     times_seen      INTEGER,
     has_description INTEGER,
     score           INTEGER,          -- NULL = not scored yet (no description)
@@ -79,6 +80,8 @@ def sync(raw_path: Path = RAW_JOBS_PATH, ranked_path: Path = RANKED_PATH,
     raw = _load(raw_path)
     ranked = {r["job_id"]: r for r in _load(ranked_path)}
     with connect(db_path) as con:
+        con.execute("DROP TABLE jobs")                 # rebuilt from the files; picks up schema changes
+        con.executescript(SCHEMA)
         with_status = {row[0] for row in con.execute("SELECT DISTINCT job_id FROM status_history")}
         rows = []
         for j in raw:
@@ -88,7 +91,7 @@ def sync(raw_path: Path = RAW_JOBS_PATH, ranked_path: Path = RANKED_PATH,
             rows.append((
                 j["job_id"], j.get("title", ""), j.get("company", ""), j.get("location", ""),
                 j.get("url", ""), j.get("source", ""), j.get("salary") or "", j.get("scraped_at", ""),
-                j.get("first_seen_at") or j.get("scraped_at", ""), j.get("times_seen", 1),
+                j.get("first_seen_at") or j.get("scraped_at", ""), j.get("posted_at"), j.get("times_seen", 1),
                 int(bool((j.get("description") or "").strip())),
                 r.get("score"), r.get("excluded"), r.get("role_family"), r.get("match_summary"),
                 json.dumps(r.get("skills_match") or [], ensure_ascii=False),
@@ -99,8 +102,7 @@ def sync(raw_path: Path = RAW_JOBS_PATH, ranked_path: Path = RANKED_PATH,
                 json.dumps(r.get("facts") or {}, ensure_ascii=False),
                 r.get("ranked_at"),
             ))
-        con.execute("DELETE FROM jobs")
-        con.executemany(f"INSERT INTO jobs VALUES ({','.join('?' * 22)})", rows)
+        con.executemany(f"INSERT INTO jobs VALUES ({','.join('?' * 23)})", rows)
     return len(rows)
 
 
@@ -124,7 +126,9 @@ SELECT j.job_id, j.title, j.company, j.location, j.url, j.source, j.salary,
        j.seniority_match, j.remote_match, j.points, j.facts, j.times_seen,
        COALESCE(l.status, 'new') AS status,
        substr(j.scraped_at, 1, 10)   AS date_scraped,
-       substr(j.first_seen_at, 1, 10) AS first_seen
+       substr(j.first_seen_at, 1, 10) AS first_seen,
+       COALESCE(substr(j.posted_at, 1, 10), substr(j.first_seen_at, 1, 10)) AS posted,
+       j.posted_at IS NOT NULL AS posted_known
 FROM jobs j
 LEFT JOIN latest l ON l.job_id = j.job_id AND l.rn = 1
 ORDER BY j.score IS NULL, j.score DESC, j.scraped_at DESC

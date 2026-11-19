@@ -22,13 +22,14 @@ import time
 import requests
 
 from config import ATS_COMPANIES, ATS_LOCATION_KEYWORDS, DESCRIPTION_STORE_MAX_CHARS, SOURCES
-from scraper.utils import make_id, is_relevant, now, html_to_text
+from scraper.utils import make_id, is_relevant, now, html_to_text, to_date
 
 TIMEOUT = 20
 
 
-def _job(title, company, location, description, url, salary, source) -> dict:
+def _job(title, company, location, description, url, salary, source, posted_at=None) -> dict:
     return {
+        "posted_at":   to_date(posted_at),
         "job_id":      make_id(url),
         "title":       title.strip(),
         "company":     company,
@@ -53,7 +54,7 @@ def parse_greenhouse(data: dict, company: str) -> list[dict]:
         desc = html_to_text(html.unescape(j.get("content", "") or ""))
         out.append(_job(
             j.get("title", ""), company, (j.get("location") or {}).get("name", ""),
-            desc, url, "", "greenhouse",
+            desc, url, "", "greenhouse", j.get("first_published") or j.get("updated_at"),
         ))
     return out
 
@@ -81,7 +82,7 @@ def parse_lever(data: list, company: str) -> list[dict]:
         )
         out.append(_job(
             j.get("text", ""), company, location,
-            "\n".join(p for p in parts if p), url, salary, "lever",
+            "\n".join(p for p in parts if p), url, salary, "lever", j.get("createdAt"),
         ))
     return out
 
@@ -102,7 +103,8 @@ def parse_ashby(data: dict, company: str) -> list[dict]:
             location = f"{location} (Remote)".strip()
         desc = j.get("descriptionPlain") or html_to_text(j.get("descriptionHtml", ""))
         salary = (j.get("compensation") or {}).get("compensationTierSummary", "")
-        out.append(_job(j.get("title", ""), company, location, desc, url, salary, "ashby"))
+        out.append(_job(j.get("title", ""), company, location, desc, url, salary, "ashby",
+                        j.get("publishedAt") or j.get("publishedDate")))
     return out
 
 

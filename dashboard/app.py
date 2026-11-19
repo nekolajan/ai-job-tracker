@@ -618,14 +618,15 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
         search_query = st.text_input("Search jobs", placeholder="Title, company, skill…", label_visibility="collapsed")
 
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<div class="sidebar-section-title">🕒 Found</div>', unsafe_allow_html=True)
-        found_all = pd.to_datetime(df["first_seen"] if "first_seen" in df else df["date_scraped"],
-                                   errors="coerce").dt.date
+        st.markdown('<div class="sidebar-section-title">🕒 Posted</div>', unsafe_allow_html=True)
+        date_col = "posted" if "posted" in df else ("first_seen" if "first_seen" in df else "date_scraped")
+        found_all = pd.to_datetime(df[date_col], errors="coerce").dt.date
         found_filter = st.selectbox(
             "Found", ["Any time", "Last run", "Last 3 days", "Last 7 days", "Last 30 days", "Choose dates…"],
             label_visibility="collapsed",
-            help="When the posting was first found. 'Last run' = jobs added by the most recent daily run. "
-                 "With a period chosen, jobs without a score are shown too.",
+            help="Publication date from the job board; where the board does not give one, the day "
+                 "the tracker first found the posting. 'Last run' = postings first found by the most "
+                 "recent daily run. With a period chosen, jobs without a score are shown too.",
         )
         found_range = None
         if found_filter == "Choose dates…" and found_all.notna().any():
@@ -724,7 +725,9 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
     if period_active:
         found = found_all.loc[f.index]
         if found_filter == "Last run":
-            f = f[found == found_all.max()]
+            first_seen = pd.to_datetime(df["first_seen"] if "first_seen" in df else df["date_scraped"],
+                                        errors="coerce").dt.date
+            f = f[first_seen.loc[f.index] == first_seen.max()]
         elif found_filter == "Choose dates…":
             if found_range:
                 f = f[(found >= found_range[0]) & (found <= found_range[1])]

@@ -31,7 +31,7 @@ from config import (
 )
 from scraper.utils import (
     HEADERS as _HEADERS, make_id, canonical_url, is_relevant, is_allowed,
-    fingerprint, now as _now,
+    fingerprint, now as _now, to_date,
 )
 from scraper.ats import fetch_ats
 from scraper.details import enrich_descriptions, recent_jobs
@@ -89,6 +89,7 @@ def fetch_remotive() -> list[dict]:
                     "url":         job.get("url", ""),
                     "source":      "remotive",
                     "salary":      job.get("salary", ""),
+                    "posted_at":   to_date(job.get("publication_date")),
                     "scraped_at":  _now(),
                 })
             time.sleep(cfg.request_delay_seconds)
@@ -235,6 +236,7 @@ def fetch_linkedin() -> list[dict]:
                     continue
 
                 url = link_el["href"].split("?")[0]
+                time_el = card.select_one("time[datetime]")
                 results.append({
                     "job_id":      make_id(url),
                     "title":       title,
@@ -244,6 +246,7 @@ def fetch_linkedin() -> list[dict]:
                     "url":         url,
                     "source":      "linkedin",
                     "salary":      "",
+                    "posted_at":   to_date(time_el["datetime"]) if time_el else None,
                     "scraped_at":  _now(),
                 })
             time.sleep(cfg.request_delay_seconds)
@@ -432,6 +435,7 @@ def fetch_himalayas() -> list[dict]:
                     "url":         url,
                     "source":      "himalayas",
                     "salary":      salary,
+                    "posted_at":   to_date(job.get("pubDate")),
                     "scraped_at":  _now(),
                 })
 
@@ -500,6 +504,7 @@ def fetch_remoteok() -> list[dict]:
                     "url":         url,
                     "source":      "remoteok",
                     "salary":      salary,
+                    "posted_at":   to_date(job.get("date") or job.get("epoch")),
                     "scraped_at":  _now(),
                 })
 
@@ -615,6 +620,8 @@ def merge_new(existing: dict, jobs: list[dict], seen_fps: set) -> tuple[list[dic
             continue
         if job["job_id"] in existing:
             skipped["duplicate"] += 1
+            if job.get("posted_at") and not existing[job["job_id"]].get("posted_at"):
+                existing[job["job_id"]]["posted_at"] = job["posted_at"]   # date learned later
             continue
         fp = fingerprint(job)
         if fp in seen_fps:

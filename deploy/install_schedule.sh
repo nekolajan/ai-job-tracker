@@ -1,6 +1,8 @@
 #!/bin/bash
 # Runs `python -m pipeline` every day at the time below, using macOS launchd.
 # If the Mac is asleep at that time, the run starts when it wakes up.
+# While it runs, `caffeinate -i` stops the Mac from falling asleep when idle
+# (closing the lid still puts it to sleep).
 #
 #   bash deploy/install_schedule.sh            # install or update (default 08:00)
 #   bash deploy/install_schedule.sh 7 30       # install for 07:30
@@ -42,9 +44,12 @@ cat > "$PLIST" <<PLIST
   <key>Label</key><string>$LABEL</string>
   <key>WorkingDirectory</key><string>$REPO</string>
   <key>ProgramArguments</key>
-  <array><string>$PYTHON</string><string>-m</string><string>pipeline</string></array>
+  <array><string>/usr/bin/caffeinate</string><string>-i</string><string>$PYTHON</string><string>-u</string><string>-m</string><string>pipeline</string></array>
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+  </dict>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>$HOUR</integer><key>Minute</key><integer>$MINUTE</integer></dict>
   <key>StandardOutPath</key><string>$REPO/data/logs/pipeline.log</string>

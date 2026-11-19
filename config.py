@@ -198,6 +198,14 @@ LINKEDIN_ALLOWED_LOCATIONS = ["czech", "czechia", "prague", "praha", "brno", "re
 # employer pages whose content is not in the HTML) – such text is discarded
 DESCRIPTION_BOILERPLATE = ["alma career czechia", "vizuální podoba webové stránky"]
 
+# Different names for the same company on different sites (lower-case, without
+# accents and legal forms). Used to spot the same posting across sources.
+COMPANY_ALIASES = {
+    "everpure": "pure storage",
+    "rohlik group": "rohlik",
+    "rohlik cz": "rohlik",
+}
+
 # Same title + company already stored within this many days → treat as duplicate
 DEDUP_WINDOW_DAYS = 60
 
@@ -244,7 +252,8 @@ LLM_PROVIDER = "ollama"                      # runs on this computer, costs noth
 OLLAMA_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen3.5:4b"
 OLLAMA_CONTEXT_TOKENS = 4096
-OLLAMA_TIMEOUT_SECONDS = 240
+OLLAMA_TIMEOUT_SECONDS = 180               # one job; a slower answer counts as failed
+EXTRACTION_TIME_BUDGET_MINUTES = 30        # stop extracting after this; ranking still runs
 
 MAX_EXTRACTIONS_PER_RUN = 40                 # newest first; the rest waits for the next run
 EXTRACT_DESCRIPTION_MAX_CHARS = 6000         # longer texts keep their start and end

@@ -5,6 +5,8 @@ Shared helpers for all scrapers: stable job ids, relevance and spam filters,
 HTML-to-text and title/company fingerprints for cross-run deduplication.
 """
 
+from __future__ import annotations
+
 import hashlib
 import re
 import unicodedata
@@ -17,7 +19,7 @@ from config import (
     RELEVANT_TITLE_PATTERNS, BLOCKED_COMPANIES, BLOCKED_TITLE_PATTERNS,
     LOCATION_FILTERED_SOURCES, ALLOWED_LOCATION_KEYWORDS, LINKEDIN_ALLOWED_LOCATIONS,
     DESCRIPTION_BOILERPLATE, EXCLUDED_TITLE_PATTERNS, TITLE_GATE_OVERRIDES,
-    DETAIL_SOURCES, LEGACY_TRUNCATED_LENGTH, MAX_DETAIL_ATTEMPTS,
+    DETAIL_SOURCES, LEGACY_TRUNCATED_LENGTH, MAX_DETAIL_ATTEMPTS, COMPANY_ALIASES,
 )
 
 _RELEVANT_TITLE_RE = [re.compile(p) for p in RELEVANT_TITLE_PATTERNS]
@@ -65,9 +67,33 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
+def company_key(name: str) -> str:
+    """'GoodData.AI' → 'gooddata', 'Everpure' → 'pure storage' (config.COMPANY_ALIASES)."""
+    name = re.sub(r"\.(ai|io|com|cz|eu|co)\b", " ", name or "", flags=re.I)
+    key = _norm(name)
+    return COMPANY_ALIASES.get(key, key)
+
+
 def fingerprint(job: dict) -> str:
     """Title + company key used to spot the same posting under a different URL/source."""
-    return f"{_norm(job.get('title', ''))}|{_norm(job.get('company', ''))}"
+    return f"{_norm(job.get('title', ''))}|{company_key(job.get('company', ''))}"
+
+
+def to_date(value) -> str | None:
+    """Publication date from an API value → 'YYYY-MM-DD'. Accepts ISO strings
+    ('2026-11-03T10:00:00Z'), epoch seconds or milliseconds; None if unusable."""
+    if value in (None, "", 0):
+        return None
+    if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+        ts = float(value)
+        if ts > 1e11:                     # milliseconds
+            ts /= 1000
+        try:
+            return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+        except (OverflowError, OSError, ValueError):
+            return None
+    m = re.match(r"(\d{4}-\d{2}-\d{2})", str(value).strip())
+    return m.group(1) if m else None
 
 
 def is_relevant(title: str) -> bool:

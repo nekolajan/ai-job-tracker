@@ -16,6 +16,8 @@ in the last config.DETAIL_BACKFILL_DAYS days:
   python -m scraper.details --backfill 100 --days 14
 """
 
+from __future__ import annotations
+
 import json
 import re
 import sys
@@ -29,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 from config import (
     MAX_DETAIL_FETCHES_PER_RUN, DESCRIPTION_STORE_MAX_CHARS, DETAIL_BACKFILL_DAYS,
 )
-from scraper.utils import HEADERS, html_to_text, is_boilerplate, needs_description
+from scraper.utils import HEADERS, html_to_text, is_boilerplate, needs_description, to_date
 
 TIMEOUT = 20
 MAX_CONSECUTIVE_ERRORS = 3
@@ -58,6 +60,24 @@ def _from_json_ld(soup: BeautifulSoup) -> str:
                 if len(desc) > 200:
                     return desc
     return ""
+
+
+def posted_date(page_html: str) -> str | None:
+    """datePosted of a schema.org JobPosting on the page, as 'YYYY-MM-DD'."""
+    soup = BeautifulSoup(page_html, "html.parser")
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        items = data if isinstance(data, list) else data.get("@graph", [data])
+        for item in items:
+            if isinstance(item, dict) and item.get("@type") == "JobPosting" and item.get("datePosted"):
+                return to_date(item["datePosted"])
+    time_el = soup.select_one(".posted-time-ago__text, time[datetime]")   # LinkedIn guest page
+    if time_el is not None and time_el.get("datetime"):
+        return to_date(time_el["datetime"])
+    return None
 
 
 def _from_selectors(soup: BeautifulSoup, source: str) -> str:
@@ -115,6 +135,8 @@ def fetch_description(job: dict) -> str:
         timeout=TIMEOUT,
     )
     resp.raise_for_status()
+    if not job.get("posted_at"):
+        job["posted_at"] = posted_date(resp.text)
     return extract_description(resp.text, job.get("source", ""))
 
 
