@@ -58,7 +58,7 @@ SOURCES: dict[str, SourceConfig] = {
         name="linkedin",
         enabled=True,
         max_results_per_keyword=25,
-        request_delay_seconds=3.0,
+        request_delay_seconds=10.0,   # LinkedIn answers 429 when asked faster
     ),
     "jobstack": SourceConfig(
         name="jobstack",

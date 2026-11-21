@@ -35,7 +35,7 @@ from scraper.utils import HEADERS, html_to_text, is_boilerplate, needs_descripti
 
 TIMEOUT = 20
 MAX_CONSECUTIVE_ERRORS = 3
-_DELAY = {"linkedin": 4.0, "jobs_cz": 2.0, "jobstack": 2.0}
+_DELAY = {"linkedin": 10.0, "jobs_cz": 2.0, "jobstack": 2.0}   # LinkedIn rate-limits at ~4 s
 
 _SITE_SELECTORS = {
     "linkedin": [".show-more-less-html__markup", ".description__text"],
