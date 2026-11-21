@@ -33,6 +33,8 @@ from config import (
 )
 from scraper.utils import HEADERS, html_to_text, is_boilerplate, needs_description, to_date
 
+RATE_LIMIT_COOLDOWN_SECONDS = 120
+
 TIMEOUT = 20
 MAX_CONSECUTIVE_ERRORS = 3
 _DELAY = {"linkedin": 10.0, "jobs_cz": 2.0, "jobstack": 2.0}   # LinkedIn rate-limits at ~4 s
@@ -163,14 +165,25 @@ def enrich_descriptions(jobs: list[dict], limit: int = MAX_DETAIL_FETCHES_PER_RU
         for q in queues.values():
             if q and len(todo) < limit:
                 todo.append(q.pop(0))
+    # LinkedIn last: it counts every request of the run (search included) and
+    # starts refusing early – the longer the gap after the search, the better
+    todo.sort(key=lambda j: j.get("source") == "linkedin")
 
-    filled, expired, errors, blocked = 0, 0, {}, set()
+    filled, expired, errors, blocked, cooled = 0, 0, {}, set(), set()
     for job in todo:
         source = job.get("source")
         if source in blocked:
             continue
         try:
-            desc = fetch_description(job)
+            try:
+                desc = fetch_description(job)
+            except requests.HTTPError as e:
+                if e.response is None or e.response.status_code != 429 or source in cooled:
+                    raise
+                cooled.add(source)            # first 429 of the run: wait once, then retry
+                print(f"[details] {source}: rate limited – waiting {RATE_LIMIT_COOLDOWN_SECONDS}s and trying again")
+                time.sleep(RATE_LIMIT_COOLDOWN_SECONDS)
+                desc = fetch_description(job)
             errors[source] = 0
             if desc:
                 job["description"] = desc

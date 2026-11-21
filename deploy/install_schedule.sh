@@ -1,11 +1,13 @@
 #!/bin/bash
-# Runs `python -m pipeline` every day at the time below, using macOS launchd.
+# Runs `python -m pipeline` every day at the times below, using macOS launchd.
 # If the Mac is asleep at that time, the run starts when it wakes up.
+# Scraping happens only in the first run of the day; later runs catch up on
+# extraction (handy when the Mac slept through the morning run).
 # While it runs, `caffeinate -i` stops the Mac from falling asleep when idle
 # (closing the lid still puts it to sleep).
 #
-#   bash deploy/install_schedule.sh            # install or update (default 08:00)
-#   bash deploy/install_schedule.sh 7 30       # install for 07:30
+#   bash deploy/install_schedule.sh                 # install or update (default 09:30 and 14:00)
+#   bash deploy/install_schedule.sh 8:00 12:30 18:00 # any times, HH:MM
 #   bash deploy/install_schedule.sh --run-now  # start a run right away (to test)
 #   bash deploy/install_schedule.sh --remove   # uninstall
 #
@@ -28,7 +30,14 @@ if [[ "${1:-}" == "--run-now" ]]; then
   exit 0
 fi
 
-HOUR="${1:-8}"; MINUTE="${2:-0}"
+TIMES=("$@")
+[[ ${#TIMES[@]} -eq 0 ]] && TIMES=("09:30" "14:00")
+INTERVALS=""
+for t in "${TIMES[@]}"; do
+  [[ "$t" =~ ^([0-9]{1,2}):([0-9]{2})$ ]] || { echo "Times must look like 9:30 or 14:00, got '$t'"; exit 1; }
+  H=$((10#${BASH_REMATCH[1]})); M=$((10#${BASH_REMATCH[2]}))
+  INTERVALS+="    <dict><key>Hour</key><integer>$H</integer><key>Minute</key><integer>$M</integer></dict>"$'\n'
+done
 PYTHON=""
 for candidate in "$REPO/venv/bin/python" "$REPO/.venv/bin/python"; do
   [[ -x "$candidate" ]] && PYTHON="$candidate" && break
@@ -51,7 +60,8 @@ cat > "$PLIST" <<PLIST
     <key>PYTHONUNBUFFERED</key><string>1</string>
   </dict>
   <key>StartCalendarInterval</key>
-  <dict><key>Hour</key><integer>$HOUR</integer><key>Minute</key><integer>$MINUTE</integer></dict>
+  <array>
+$INTERVALS  </array>
   <key>StandardOutPath</key><string>$REPO/data/logs/pipeline.log</string>
   <key>StandardErrorPath</key><string>$REPO/data/logs/pipeline.log</string>
   <key>LowPriorityIO</key><true/>
@@ -61,5 +71,5 @@ PLIST
 
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 launchctl bootstrap "$DOMAIN" "$PLIST"
-printf "Daily run installed for %02d:%02d using %s\n" "$HOUR" "$MINUTE" "$PYTHON"
+echo "Daily runs installed for ${TIMES[*]} using $PYTHON"
 echo "Test it now with: bash deploy/install_schedule.sh --run-now"

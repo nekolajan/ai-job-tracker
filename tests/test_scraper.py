@@ -137,7 +137,7 @@ class TestEnrich(unittest.TestCase):
             filled = d.enrich_descriptions(jobs, limit=13)
         self.assertEqual(filled, 3)
         self.assertEqual(calls.count("linkedin"), d.MAX_CONSECUTIVE_ERRORS)
-        self.assertEqual(calls[:2], ["linkedin", "jobs_cz"])
+        self.assertEqual(calls[:4], ["jobs_cz", "jobs_cz", "jobs_cz", "linkedin"])   # LinkedIn goes last
 
 
 class TestFixes(unittest.TestCase):
@@ -355,10 +355,27 @@ class TestExpired(unittest.TestCase):
         calls = []
         def fake(job):
             calls.append(job["url"]); raise self._http_error(429)
-        with mock.patch.object(d, "fetch_description", fake), mock.patch.object(d.time, "sleep"):
+        with mock.patch.object(d, "fetch_description", fake), mock.patch.object(d.time, "sleep") as sleep:
             d.enrich_descriptions(jobs, limit=4)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)                     # one retry after the cool-down, then blocked
+        sleep.assert_any_call(d.RATE_LIMIT_COOLDOWN_SECONDS)
         self.assertFalse(any(j.get("expired_at") for j in jobs))
+
+    def test_429_cooldown_then_success_and_linkedin_goes_last(self):
+        from unittest import mock
+        import scraper.details as d
+        jobs = ([{"source": "linkedin", "url": f"https://x/{i}", "description": ""} for i in range(3)]
+                + [{"source": "jobs_cz", "url": f"https://y/{i}", "description": ""} for i in range(2)])
+        calls = []
+        def fake(job):
+            calls.append(job["url"])
+            if job["url"] == "https://x/0" and calls.count("https://x/0") == 1:
+                raise self._http_error(429)
+            return "text"
+        with mock.patch.object(d, "fetch_description", fake), mock.patch.object(d.time, "sleep"):
+            filled = d.enrich_descriptions(jobs, limit=5)
+        self.assertEqual(filled, 5)
+        self.assertEqual(calls[:2], ["https://y/0", "https://y/1"])   # jobs.cz first
 
     def test_empty_page_is_given_up_after_attempts(self):
         from unittest import mock

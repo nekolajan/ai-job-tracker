@@ -12,8 +12,14 @@ the requests to the job boards:
 Each step runs even if an earlier one failed (e.g. Ollama not running → the
 ranking still runs on the facts already extracted).
 
+The schedule runs it twice a day. Scraping happens only once per day (the
+first run that gets through it); a later run that day only catches up on
+extraction, ranking and the database – useful when the Mac slept through the
+morning run.
+
 Usage:
-    python -m pipeline                 # full run
+    python -m pipeline                 # full run (scrape skipped if already done today)
+    python -m pipeline --force-scrape  # scrape even if it already ran today
     python -m pipeline --skip-scrape   # only extract + rank
     python -m pipeline --extract-limit 10
 
@@ -23,6 +29,7 @@ Scheduled daily on macOS with deploy/install_schedule.sh.
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from config import MAX_EXTRACTIONS_PER_RUN, SCORE_THRESHOLD_GOOD
 
@@ -39,6 +46,21 @@ def _step(name: str, fn):
         return False, None
 
 
+LAST_SCRAPE_PATH = Path(__file__).parent / "data" / "logs" / "last_scrape.txt"
+
+
+def scraped_today() -> bool:
+    try:
+        return LAST_SCRAPE_PATH.read_text().strip() == datetime.now().strftime("%Y-%m-%d")
+    except OSError:
+        return False
+
+
+def mark_scraped() -> None:
+    LAST_SCRAPE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LAST_SCRAPE_PATH.write_text(datetime.now().strftime("%Y-%m-%d"))
+
+
 def _arg(flag: str, default=None):
     return sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv else default
 
@@ -50,8 +72,15 @@ def main() -> int:
     from storage.local_db import sync
 
     summary = {}
-    if "--skip-scrape" not in sys.argv:
+    if "--skip-scrape" in sys.argv:
+        pass
+    elif scraped_today() and "--force-scrape" not in sys.argv:
+        print(f"\n=== scrape skipped – already done today ({datetime.now():%Y-%m-%d %H:%M}); "
+              f"catching up on extraction")
+    else:
         summary["scrape"], _ = _step("scrape", scrape_all)
+        if summary["scrape"]:
+            mark_scraped()
 
     ok, result = _step("extract", lambda: run_extraction(int(_arg("--extract-limit", MAX_EXTRACTIONS_PER_RUN))))
     if ok and result and result.get("problem"):
