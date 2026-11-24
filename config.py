@@ -181,6 +181,10 @@ EXCLUDED_TITLE_PATTERNS = [
     # classic (IT) business analyst roles – remove these lines to keep them
     r"\bbusiness analy(st|tik)\w*", r"\bbyznys analytik\w*", r"\bit analy(st|tik)\w*",
 ]
+# Always excluded, whatever the seniority: sales roles that mention AI or data in the title
+ALWAYS_EXCLUDED_TITLE_PATTERNS = [
+    r"\baccount (executive|manager|director)\b", r"\bsales (executive|representative|manager)\b",
+]
 # A title that also matches one of these is kept ("Junior/Medior Data Engineer")
 TITLE_GATE_OVERRIDES = [r"\bsenior\w*", r"\bmedior\w*", r"\blead\b", r"\bprincipal\b", r"\bstaff\b"]
 
@@ -234,7 +238,7 @@ RELEVANT_TITLE_PATTERNS = [
     r"\banalyst\w*", r"\banalytik\w*", r"\banalyticka\b", r"\banalytics\b",
     r"\bbi\b", r"\bpbi\b", r"\bbusiness intelligence\b", r"\btableau\b",
     r"\binsights?\b", r"\breporting\w*",
-    r"\bdwh\b", r"\bwarehouse\b", r"\betl\b", r"\bpipelines?\b", r"\bsql\b",
+    r"\bdwh\b", r"\bdata ?warehous\w*", r"\betl\b", r"\bpipelines?\b", r"\bsql\b",
     r"\bdatabricks\b", r"\bsnowflake\b", r"\bbigquery\b", r"\bdbt\b",
     r"\bai\b", r"\bml\b", r"\bmachine learning\b", r"\bllms?\b", r"\bgenai\b", r"\bnlp\b",
     r"\bumel\w* inteligenc\w*",

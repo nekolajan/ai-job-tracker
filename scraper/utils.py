@@ -19,11 +19,13 @@ from config import (
     RELEVANT_TITLE_PATTERNS, BLOCKED_COMPANIES, BLOCKED_TITLE_PATTERNS,
     LOCATION_FILTERED_SOURCES, ALLOWED_LOCATION_KEYWORDS, LINKEDIN_ALLOWED_LOCATIONS,
     DESCRIPTION_BOILERPLATE, EXCLUDED_TITLE_PATTERNS, TITLE_GATE_OVERRIDES,
+    ALWAYS_EXCLUDED_TITLE_PATTERNS,
     DETAIL_SOURCES, LEGACY_TRUNCATED_LENGTH, MAX_DETAIL_ATTEMPTS, COMPANY_ALIASES,
 )
 
 _RELEVANT_TITLE_RE = [re.compile(p) for p in RELEVANT_TITLE_PATTERNS]
 _EXCLUDED_TITLE_RE = [re.compile(p) for p in EXCLUDED_TITLE_PATTERNS]
+_ALWAYS_EXCLUDED_RE = [re.compile(p) for p in ALWAYS_EXCLUDED_TITLE_PATTERNS]
 _TITLE_OVERRIDE_RE = [re.compile(p) for p in TITLE_GATE_OVERRIDES]
 
 HEADERS = {
@@ -112,6 +114,8 @@ def title_excluded(title: str) -> bool:
     """Title gate: entry-level and other unwanted roles (config.EXCLUDED_TITLE_PATTERNS),
     unless the title also names a wanted level (config.TITLE_GATE_OVERRIDES)."""
     t = _plain(title)
+    if any(r.search(t) for r in _ALWAYS_EXCLUDED_RE):
+        return True
     if not any(r.search(t) for r in _EXCLUDED_TITLE_RE):
         return False
     return not any(r.search(t) for r in _TITLE_OVERRIDE_RE)

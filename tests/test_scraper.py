@@ -286,6 +286,15 @@ class TestRelevance(unittest.TestCase):
                   "Bid and Proposal Engineer", "Database administrator (MySQL)", "Key Account Manager"]:
             self.assertFalse(is_relevant(t), t)
 
+    def test_warehouse_means_data_warehouse_and_sales_roles_are_excluded(self):
+        from scraper.utils import title_excluded
+        self.assertFalse(is_relevant("Koordinátor úseku skladu / Warehouse Lead"))
+        self.assertTrue(is_relevant("Data Warehouse Developer"))
+        self.assertTrue(is_relevant("Datawarehouse Specialist"))
+        self.assertTrue(title_excluded("Sr. Account Executive, AI & HPC"))
+        self.assertTrue(title_excluded("Senior Account Manager - Data Platform"))
+        self.assertFalse(title_excluded("Senior Sales Operations Analyst"))
+
     def test_data_bi_ai_titles_are_kept(self):
         for t in ["Fabric/PBI Consultant", "Senior AI/ML Engineer", "Head of AI", "BI konzultant",
                   "Datový inženýr", "Datová analytička", "Analytics Engineer", "LLM Engineer",
